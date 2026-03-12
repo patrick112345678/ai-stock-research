@@ -1,7 +1,7 @@
 streamlit
-yfinance
+yfinance>=1.0
 pandas
 numpy
 requests
 google-genai
-lightweight-charts-v5
+streamlit-lightweight-charts-v5
