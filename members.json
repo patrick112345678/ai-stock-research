@@ -1,7 +1,7 @@
 {
   "users": {
     "admin": {
-      "password_hash": "$2b$12$6uyQ656NwItnFXHgk/EdzOA72n4wahyAiAZP0BPBnyzsFZafW34Fi",
+      "password_hash": "$2b$12$InulYws38L.hB/nLKZ5BY.rbffjCO1zOcLlHuFVSfcS8mi1EnCXy2",
       "role": "admin",
       "plan": "admin",
       "ai_used": 0,
