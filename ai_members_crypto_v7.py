@@ -10,13 +10,6 @@ from datetime import datetime
 from pathlib import Path
 import hashlib
 import json
-import re
-import re
-
-try:
-    import stripe
-except Exception:
-    stripe = None
 
 # =========================
 # Page Config
@@ -47,7 +40,7 @@ I18N = {
         "remove_watchlist": "移除自選",
         "watchlist": "⭐ 自選股",
 
-        "app_title": "📈 AI 股票研究平台",
+        "app_title": "📈 AI 股票研究平台 Pro v2",
         "app_caption": "先看結論，再看理由，最後再看細節；再加上排行、選股、型態與自動同業比較。",
 
         "tab_overview": "總覽",
@@ -324,11 +317,6 @@ I18N = {
 
 def tr(key, lang="zh"):
     return I18N.get(lang, I18N["zh"]).get(key, key)
-
-
-def plain_title(text):
-    s = str(text or "").strip()
-    return re.sub(r"^\s*#+\s*", "", s)
 
 
 def trend_label(score, lang="zh"):
@@ -1348,7 +1336,7 @@ def get_stock(symbol, interval="1d"):
 # =========================
 # Multi Timeframe Summary
 # =========================
-def get_multi_timeframe_summary(symbol, lang="zh", intervals=("1h", "4h", "1d", "1wk"), market_mode="Stock"):
+def get_multi_timeframe_summary(symbol, lang="zh", intervals=("1h", "4h", "1d", "1wk")):
     rows = []
 
     col_period = "週期" if lang == "zh" else "Interval"
@@ -1357,12 +1345,10 @@ def get_multi_timeframe_summary(symbol, lang="zh", intervals=("1h", "4h", "1d", 
     col_rsi = "RSI"
     col_score = "訊號分數" if lang == "zh" else "Signal Score"
 
-    fetcher = get_crypto if market_mode == "Crypto" else get_stock
-
     for iv in intervals:
-        data = fetcher(symbol, interval=iv)
+        data = get_stock(symbol, interval=iv)
 
-        if data.get("hist") is None or data.get("hist") is None or data["hist"].empty:
+        if data.get("hist") is None:
             rows.append({
                 col_period: iv,
                 col_trend: "無資料" if lang == "zh" else "No Data",
@@ -1376,10 +1362,10 @@ def get_multi_timeframe_summary(symbol, lang="zh", intervals=("1h", "4h", "1d", 
 
         rows.append({
             col_period: iv,
-            col_trend: get_trend_label(data.get("score", 0), lang=lang),
-            col_price: fmt_value(data.get("price")),
+            col_trend: get_trend_label(data["score"], lang=lang),
+            col_price: fmt_value(data["price"]),
             col_rsi: fmt_value(latest.get("RSI")),
-            col_score: f"{data.get('score', 0)}/5",
+            col_score: f"{data['score']}/5",
         })
 
     return pd.DataFrame(rows)
@@ -1911,6 +1897,7 @@ def build_watchlist_table(symbols, lang="zh"):
     return pd.DataFrame(rows)
 
 
+
 # =========================
 # Membership / Auth
 # =========================
@@ -1918,487 +1905,17 @@ USERS_DB_FILE = Path("members.json")
 FREE_AI_LIMIT = 10
 DEFAULT_ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123456")
-REGISTER_INVITE_CODE = os.getenv("REGISTER_INVITE_CODE", "")
-MAX_LOGIN_FAILS = 5
-LOGIN_LOCK_MINUTES = 15
 
-PLAN_CONFIG = {
-    "free": {
-        "label_zh": "免費版",
-        "label_en": "Free",
-        "price_total": 0.0,
-        "months": 0,
-        "avg_monthly": 0.0,
-        "discount_pct": 0,
-        "role": "free",
-        "unlimited_ai": False,
-        "ai_limit": FREE_AI_LIMIT,
-    },
-    "pro_monthly": {
-        "label_zh": "PRO 月付",
-        "label_en": "PRO Monthly",
-        "price_total": 3.0,
-        "months": 1,
-        "avg_monthly": 3.0,
-        "discount_pct": 0,
-        "role": "paid",
-        "unlimited_ai": True,
-        "ai_limit": None,
-    },
-    "pro_6m": {
-        "label_zh": "PRO 半年",
-        "label_en": "PRO 6 Months",
-        "price_total": 14.4,
-        "months": 6,
-        "avg_monthly": 2.4,
-        "discount_pct": 20,
-        "role": "paid",
-        "unlimited_ai": True,
-        "ai_limit": None,
-    },
-    "pro_yearly": {
-        "label_zh": "PRO 年繳",
-        "label_en": "PRO Yearly",
-        "price_total": 27.0,
-        "months": 12,
-        "avg_monthly": 2.25,
-        "discount_pct": 25,
-        "role": "paid",
-        "unlimited_ai": True,
-        "ai_limit": None,
-    },
-    "admin": {
-        "label_zh": "管理者",
-        "label_en": "Admin",
-        "price_total": 0.0,
-        "months": 0,
-        "avg_monthly": 0.0,
-        "discount_pct": 0,
-        "role": "admin",
-        "unlimited_ai": True,
-        "ai_limit": None,
-    },
-}
-
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY", "")
-STRIPE_PRICE_6M = os.getenv("STRIPE_PRICE_6M", "")
-STRIPE_PRICE_YEARLY = os.getenv("STRIPE_PRICE_YEARLY", "")
-STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "http://localhost:8501")
-STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", STRIPE_SUCCESS_URL)
-STRIPE_PORTAL_RETURN_URL = os.getenv("STRIPE_PORTAL_RETURN_URL", STRIPE_SUCCESS_URL)
-
-
-import bcrypt
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-def verify_password(password: str, password_hash: str) -> bool:
-    try:
-        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
-    except Exception:
-        return False
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-def get_plan_meta(plan: str):
-    return PLAN_CONFIG.get(plan or "free", PLAN_CONFIG["free"])
-
-
-def get_plan_label(plan: str, lang: str = "zh") -> str:
-    meta = get_plan_meta(plan)
-    return meta["label_en"] if lang == "en" else meta["label_zh"]
-
-
-def parse_iso_datetime(value):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except Exception:
-        return None
-
-
-def fmt_member_datetime(value, lang: str = "zh") -> str:
-    dt = parse_iso_datetime(value)
-    if not dt:
-        return "-"
-    return dt.strftime("%Y-%m-%d %H:%M")
-
-
-def get_stripe_price_id(plan_code: str) -> str:
-    return {
-        "pro_monthly": STRIPE_PRICE_MONTHLY,
-        "pro_6m": STRIPE_PRICE_6M,
-        "pro_yearly": STRIPE_PRICE_YEARLY,
-    }.get(plan_code, "")
-
-
-def stripe_is_ready() -> bool:
-    return bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_MONTHLY and STRIPE_PRICE_6M and STRIPE_PRICE_YEARLY)
-
-
-def create_checkout_session_for_plan(username: str, email: str, plan_code: str):
-    if not stripe:
-        return None, "尚未安裝 stripe 套件，請先執行 pip install stripe"
-    if not STRIPE_SECRET_KEY:
-        return None, "尚未設定 STRIPE_SECRET_KEY"
-    price_id = get_stripe_price_id(plan_code)
-    if not price_id:
-        return None, f"尚未設定 {plan_code} 對應的 Stripe Price ID"
-
-    stripe.api_key = STRIPE_SECRET_KEY
-    try:
-        session = stripe.checkout.Session.create(
-            mode="subscription",
-            line_items=[{"price": price_id, "quantity": 1}],
-            success_url=f"{STRIPE_SUCCESS_URL}?stripe_session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=STRIPE_CANCEL_URL,
-            customer_email=(email or None),
-            client_reference_id=normalize_username(username),
-            metadata={
-                "app_username": normalize_username(username),
-                "app_plan_code": plan_code,
-            },
-            allow_promotion_codes=True,
-        )
-        return session.url, None
-    except Exception as e:
-        return None, str(e)
-
-
-def sync_checkout_session_to_member(session_id: str):
-    if not stripe:
-        return False, "尚未安裝 stripe 套件"
-    if not STRIPE_SECRET_KEY:
-        return False, "尚未設定 STRIPE_SECRET_KEY"
-    stripe.api_key = STRIPE_SECRET_KEY
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        username_key = normalize_username((session.get("metadata") or {}).get("app_username") or session.get("client_reference_id") or "")
-        plan_code = (session.get("metadata") or {}).get("app_plan_code") or "pro_monthly"
-        if not username_key:
-            return False, "找不到對應會員"
-        subscription_id = session.get("subscription")
-        customer_id = session.get("customer")
-        current_period_end = None
-        billing_status = session.get("status") or "open"
-        auto_renew = True
-        if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
-            billing_status = sub.get("status") or billing_status
-            cpe = sub.get("current_period_end")
-            if cpe:
-                current_period_end = datetime.fromtimestamp(int(cpe)).isoformat()
-            if sub.get("cancel_at_period_end"):
-                auto_renew = False
-
-        db = load_users_db()
-        user = db.get("users", {}).get(username_key)
-        if not user:
-            return False, "會員不存在"
-        user["role"] = get_plan_meta(plan_code).get("role", "paid")
-        user["plan"] = plan_code
-        user["stripe_customer_id"] = customer_id or user.get("stripe_customer_id")
-        user["stripe_subscription_id"] = subscription_id or user.get("stripe_subscription_id")
-        user["billing_status"] = billing_status
-        user["current_period_end"] = current_period_end
-        user["auto_renew"] = auto_renew
-        user["paid_at"] = datetime.now().isoformat()
-        save_users_db(db)
-        return True, "付款成功，會員方案已同步"
-    except Exception as e:
-        return False, str(e)
-
-
-def create_customer_portal_url(username: str):
-    if not stripe:
-        return None, "尚未安裝 stripe 套件"
-    if not STRIPE_SECRET_KEY:
-        return None, "尚未設定 STRIPE_SECRET_KEY"
-    record = get_member_record(username) or {}
-    customer_id = record.get("stripe_customer_id")
-    if not customer_id:
-        return None, "尚未找到 Stripe Customer，請先完成一次付款"
-    stripe.api_key = STRIPE_SECRET_KEY
-    try:
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=STRIPE_PORTAL_RETURN_URL,
-        )
-        return session.url, None
-    except Exception as e:
-        return None, str(e)
-def sync_member_from_stripe_customer(username: str):
-    if not stripe:
-        return False, "尚未安裝 stripe 套件"
-
-    if not STRIPE_SECRET_KEY:
-        return False, "尚未設定 STRIPE_SECRET_KEY"
-
-    db = load_users_db()
-    user = db.get("users", {}).get(normalize_username(username))
-
-    if not user:
-        return False, "找不到會員資料"
-
-    customer_id = user.get("stripe_customer_id")
-    subscription_id = user.get("stripe_subscription_id")
-
-    if not customer_id and not subscription_id:
-        return False, "尚未綁定 Stripe 客戶或訂閱"
-
-    stripe.api_key = STRIPE_SECRET_KEY
-
-    try:
-        sub = None
-
-        if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
-
-        elif customer_id:
-            subs = stripe.Subscription.list(customer=customer_id, limit=1, status="all")
-            if subs.data:
-                sub = subs.data[0]
-
-        if not sub:
-            return False, "Stripe 查無有效訂閱"
-
-        price_id = sub["items"]["data"][0]["price"]["id"]
-        status = sub.get("status", "inactive")
-        current_period_end = sub.get("current_period_end")
-        cancel_at_period_end = sub.get("cancel_at_period_end", False)
-
-        reverse_plan_map = {
-            STRIPE_PRICE_MONTHLY: "pro_monthly",
-            STRIPE_PRICE_6M: "pro_6m",
-            STRIPE_PRICE_YEARLY: "pro_yearly",
-        }
-
-        local_plan = reverse_plan_map.get(price_id, user.get("plan", "free"))
-
-        user["plan"] = local_plan
-        user["role"] = "paid" if local_plan.startswith("pro_") else user.get("role", "free")
-        user["billing_status"] = status
-        user["auto_renew"] = not cancel_at_period_end
-
-        if current_period_end:
-            user["current_period_end"] = datetime.fromtimestamp(current_period_end).isoformat()
-
-        user["stripe_subscription_id"] = sub.get("id", subscription_id)
-
-        save_users_db(db)
-
-        return True, "Stripe 訂閱狀態已同步"
-
-    except Exception as e:
-        return False, str(e)
-def render_member_profile_card(username: str, lang: str = "zh"):
-    record = get_member_record(username) or {}
-    usage = get_ai_usage_info(username)
-
-    plan = record.get("plan", "free")
-    plan_label = get_plan_label(plan, lang)
-    status = record.get("billing_status", "trial" if plan == "free" else "active")
-    next_bill = fmt_member_datetime(record.get("current_period_end"), lang)
-    email_text = record.get("email", "-")
-    auto_renew = record.get("auto_renew", plan.startswith("pro_"))
-
-    renew_text = "自動續扣" if auto_renew else "未續扣"
-    if lang == "en":
-        renew_text = "Auto renew" if auto_renew else "No auto renew"
-
-    usage_text = (
-        "AI 無限制"
-        if usage["unlimited"]
-        else f"AI {usage['remaining']} / {FREE_AI_LIMIT}"
-    )
-    if lang == "en":
-        usage_text = (
-            "Unlimited AI"
-            if usage["unlimited"]
-            else f"AI {usage['remaining']} / {FREE_AI_LIMIT}"
-        )
-
-    st.markdown(
-        """
-        <style>
-        .member-pill {
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(255,255,255,0.03);
-            border-radius: 18px;
-            padding: 12px 14px;
-        }
-        .member-pill-top {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            gap:10px;
-            margin-bottom:8px;
-        }
-        .member-user {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #f3f4f6;
-        }
-        .member-muted {
-            color:#9aa4b2;
-            font-size:0.86rem;
-        }
-        .member-badge {
-            display:inline-block;
-            padding:4px 10px;
-            border-radius:999px;
-            font-size:0.78rem;
-            font-weight:600;
-            border:1px solid rgba(255,255,255,0.10);
-            margin-right:6px;
-        }
-        .member-badge-plan {
-            background: rgba(59,130,246,0.12);
-            color: #93c5fd;
-        }
-        .member-badge-status {
-            background: rgba(16,185,129,0.12);
-            color: #6ee7b7;
-        }
-        .member-kv {
-            margin-top: 4px;
-            font-size: 0.92rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        f"""
-        <div class="member-pill">
-            <div class="member-pill-top">
-                <div>
-                    <div class="member-user">👤 {username}</div>
-                    <div class="member-muted">{email_text}</div>
-                </div>
-                <div style="text-align:right">
-                    <span class="member-badge member-badge-plan">{plan_label}</span>
-                    <span class="member-badge member-badge-status">{status}</span>
-                </div>
-            </div>
-            <div class="member-kv">下次扣款 / 到期：<b>{next_bill}</b></div>
-            <div class="member-kv">續訂：<b>{renew_text}</b></div>
-            <div class="member-kv">{usage_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-def render_pricing_cards(current_member: str | None, lang: str = "zh"):
-    st.markdown("### 💳 方案與訂閱" if lang == "zh" else "### 💳 Pricing & Plans")
-    st.caption(
-        "月付 3 美元；半年 8 折；年繳 75 折。可隨時於會員中心管理付款方式與取消續訂。"
-        if lang == "zh"
-        else "$3 monthly, 20% off for 6 months, 25% off yearly."
-    )
-
-    st.markdown(
-        """
-        <style>
-        .price-card{
-            border:1px solid rgba(255,255,255,.10);
-            border-radius:20px;
-            padding:18px;
-            background:rgba(255,255,255,.03);
-            min-height:260px;
-        }
-        .price-title{font-size:1.15rem;font-weight:700;margin-bottom:8px}
-        .price-main{font-size:2rem;font-weight:800;margin-bottom:6px}
-        .price-sub{color:#9aa4b2;font-size:.9rem;margin-bottom:14px}
-        .price-badge{
-            display:inline-block;
-            padding:4px 10px;
-            border-radius:999px;
-            font-size:.78rem;
-            border:1px solid rgba(255,255,255,.1);
-            margin-bottom:12px;
-        }
-        .price-feature{margin-bottom:8px;font-size:.95rem}
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    cards = [
-        {
-            "code": "pro_monthly",
-            "title": "月付版" if lang == "zh" else "Monthly",
-            "price_total": "$3",
-            "avg": "$3 / 月",
-            "badge": "標準方案" if lang == "zh" else "Standard",
-            "desc": "適合先試用正式會員功能" if lang == "zh" else "Good for getting started",
-        },
-        {
-            "code": "pro_6m",
-            "title": "半年版" if lang == "zh" else "6 Months",
-            "price_total": "$14.4",
-            "avg": "$2.4 / 月",
-            "badge": "省 20%" if lang == "zh" else "Save 20%",
-            "desc": "比月付更划算" if lang == "zh" else "Better value than monthly",
-        },
-        {
-            "code": "pro_yearly",
-            "title": "年繳版" if lang == "zh" else "Yearly",
-            "price_total": "$27",
-            "avg": "$2.25 / 月",
-            "badge": "最划算" if lang == "zh" else "Best value",
-            "desc": "長期使用最推薦" if lang == "zh" else "Best for long-term use",
-        },
-    ]
-
-    cols = st.columns(3)
-
-    for col, card in zip(cols, cards):
-        with col:
-            st.markdown(
-                f"""
-                <div class="price-card">
-                    <div class="price-badge">{card['badge']}</div>
-                    <div class="price-title">{card['title']}</div>
-                    <div class="price-main">{card['price_total']}</div>
-                    <div class="price-sub">{card['avg']}</div>
-                    <div class="price-feature">✓ AI 研究功能</div>
-                    <div class="price-feature">✓ 完整會員權限</div>
-                    <div class="price-feature">✓ 可管理續訂與付款方式</div>
-                    <div class="price-sub">{card['desc']}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            if st.button(
-                f"選擇 {card['title']}" if lang == "zh" else f"Choose {card['title']}",
-                key=f"choose_{card['code']}",
-                use_container_width=True
-            ):
-                if not current_member:
-                    st.warning("請先登入會員" if lang == "zh" else "Please login first")
-                else:
-                    rec = get_member_record(current_member) or {}
-                    checkout_url, err = create_checkout_session_for_plan(
-                        current_member,
-                        rec.get("email", ""),
-                        card["code"]
-                    )
-                    if checkout_url:
-                        st.link_button("前往付款" if lang == "zh" else "Go to checkout", checkout_url, use_container_width=True)
-                    else:
-                        st.error(err)
 def load_users_db():
     if USERS_DB_FILE.exists():
         try:
             data = json.loads(USERS_DB_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                if "users" not in data or not isinstance(data.get("users"), dict):
-                    data["users"] = {}
                 return data
         except Exception:
             pass
@@ -2409,154 +1926,71 @@ def save_users_db(db):
     USERS_DB_FILE.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def normalize_username(username: str) -> str:
-    return (username or "").strip().lower()
-
-
-def normalize_email(email: str) -> str:
-    return (email or "").strip().lower()
-
-
-def is_valid_username(username: str) -> bool:
-    return bool(re.fullmatch(r"[a-zA-Z0-9_.-]{4,24}", username or ""))
-
-
-def is_valid_email(email: str) -> bool:
-    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email or ""))
-
-
-def is_strong_password(password: str) -> bool:
-    if len(password or "") < 8:
-        return False
-    has_letter = any(ch.isalpha() for ch in password)
-    has_digit = any(ch.isdigit() for ch in password)
-    return has_letter and has_digit
-
-
-def find_user_by_email(email: str):
-    email = normalize_email(email)
-    if not email:
-        return None
-    db = load_users_db()
-    for uname, user in db.get("users", {}).items():
-        if normalize_email(user.get("email", "")) == email:
-            return uname, user
-    return None
-
-
 def ensure_admin_account():
     db = load_users_db()
     users = db.setdefault("users", {})
-    admin_key = normalize_username(DEFAULT_ADMIN_USERNAME)
-    admin = users.get(admin_key)
+    admin = users.get(DEFAULT_ADMIN_USERNAME)
     desired_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
 
     if not admin:
-        users[admin_key] = {
-            "username": DEFAULT_ADMIN_USERNAME,
-            "email": "",
+        users[DEFAULT_ADMIN_USERNAME] = {
             "password_hash": desired_hash,
             "role": "admin",
             "plan": "admin",
             "ai_used": 0,
-            "created_at": datetime.now().isoformat(),
-            "failed_login_count": 0,
-            "lock_until": None,
+            "created_at": datetime.now().isoformat()
         }
         save_users_db(db)
     elif admin.get("password_hash") != desired_hash or admin.get("role") != "admin":
         admin["password_hash"] = desired_hash
         admin["role"] = "admin"
         admin["plan"] = "admin"
-        admin.setdefault("username", DEFAULT_ADMIN_USERNAME)
-        admin.setdefault("email", "")
-        admin.setdefault("failed_login_count", 0)
-        admin.setdefault("lock_until", None)
         save_users_db(db)
 
 
-def register_member(username: str, password: str, email: str = "", confirm_password: str = "", invite_code: str = ""):
-    username_raw = (username or "").strip()
-    username_key = normalize_username(username_raw)
+def register_member(username: str, password: str):
+    username = (username or "").strip()
     password = (password or "").strip()
-    confirm_password = (confirm_password or "").strip()
-    email = normalize_email(email)
-    invite_code = (invite_code or "").strip()
 
-    if not is_valid_username(username_key):
-        return False, "帳號需為 4~24 碼，且只能使用英文、數字、底線、點或減號"
-    if not is_valid_email(email):
-        return False, "請輸入有效 Email"
-    if not is_strong_password(password):
-        return False, "密碼至少 8 碼，且需包含英文與數字"
-    if password != confirm_password:
-        return False, "兩次輸入的密碼不一致"
-    if REGISTER_INVITE_CODE and invite_code != REGISTER_INVITE_CODE:
-        return False, "註冊碼錯誤"
+    if len(username) < 3:
+        return False, "帳號至少 3 碼 / Username must be at least 3 chars"
+    if len(password) < 6:
+        return False, "密碼至少 6 碼 / Password must be at least 6 chars"
 
     db = load_users_db()
     users = db.setdefault("users", {})
-    if username_key in users:
-        return False, "帳號已存在"
-    if find_user_by_email(email):
-        return False, "此 Email 已註冊過免費帳號"
+    if username in users:
+        return False, "帳號已存在 / Username already exists"
 
-    users[username_key] = {
-        "username": username_raw,
-        "email": email,
+    users[username] = {
         "password_hash": hash_password(password),
         "role": "free",
         "plan": "free",
         "ai_used": 0,
-        "created_at": datetime.now().isoformat(),
-        "failed_login_count": 0,
-        "lock_until": None,
-        "email_verified": False,
+        "created_at": datetime.now().isoformat()
     }
     save_users_db(db)
-    return True, "註冊成功，免費方案每個 Email 限一個帳號"
+    return True, "註冊成功 / Registered"
 
 
 def authenticate_member(username: str, password: str):
     db = load_users_db()
-    username_key = normalize_username(username)
-    user = db.get("users", {}).get(username_key)
+    user = db.get("users", {}).get((username or "").strip())
     if not user:
-        return None, "帳號或密碼錯誤"
-
-    lock_until = user.get("lock_until")
-    if lock_until:
-        try:
-            lock_dt = datetime.fromisoformat(lock_until)
-            if datetime.now() < lock_dt:
-                return None, f"登入失敗次數過多，請於 {lock_dt.strftime('%H:%M')} 後再試"
-        except Exception:
-            user["lock_until"] = None
-
-    if not verify_password((password or "").strip(), user.get("password_hash", "")):
-        failed = int(user.get("failed_login_count", 0)) + 1
-        user["failed_login_count"] = failed
-        if failed >= MAX_LOGIN_FAILS:
-            user["lock_until"] = (datetime.now() + pd.Timedelta(minutes=LOGIN_LOCK_MINUTES)).isoformat()
-            user["failed_login_count"] = 0
-        save_users_db(db)
-        return None, "帳號或密碼錯誤"
-
-    user["failed_login_count"] = 0
-    user["lock_until"] = None
-    user["last_login_at"] = datetime.now().isoformat()
-    save_users_db(db)
+        return None
+    if user.get("password_hash") != hash_password((password or "").strip()):
+        return None
     return {
-        "username": user.get("username") or username_key,
+        "username": username.strip(),
         "role": user.get("role", "free"),
         "plan": user.get("plan", "free"),
         "ai_used": int(user.get("ai_used", 0)),
-        "email": user.get("email", ""),
-    }, None
+    }
+
 
 def get_member_record(username: str):
     db = load_users_db()
-    user = db.get("users", {}).get(normalize_username(username))
+    user = db.get("users", {}).get((username or "").strip())
     if not user:
         return None
     return user
@@ -2568,30 +2002,24 @@ def get_ai_usage_info(username: str):
         return {"role": "guest", "used": 0, "remaining": 0, "unlimited": False}
 
     role = record.get("role", "free")
-    plan = record.get("plan", "free")
-    meta = get_plan_meta(plan)
     used = int(record.get("ai_used", 0))
-    unlimited = role == "admin" or bool(meta.get("unlimited_ai"))
-    ai_limit = meta.get("ai_limit", FREE_AI_LIMIT)
-    remaining = None if unlimited else max(int(ai_limit) - used, 0)
-    return {"role": role, "plan": plan, "used": used, "remaining": remaining, "unlimited": unlimited}
+    unlimited = role == "admin"
+    remaining = None if unlimited else max(FREE_AI_LIMIT - used, 0)
+    return {"role": role, "used": used, "remaining": remaining, "unlimited": unlimited}
 
 
 def consume_ai_quota(username: str):
     db = load_users_db()
-    user = db.get("users", {}).get(normalize_username(username))
+    user = db.get("users", {}).get((username or "").strip())
     if not user:
         return False, "請先登入會員 / Please login first"
 
-    plan = user.get("plan", "free")
-    meta = get_plan_meta(plan)
-    if user.get("role") == "admin" or bool(meta.get("unlimited_ai")):
+    if user.get("role") == "admin":
         return True, None
 
-    ai_limit = int(meta.get("ai_limit", FREE_AI_LIMIT))
     used = int(user.get("ai_used", 0))
-    if used >= ai_limit:
-        return False, f"目前方案 AI 額度已用完（上限 {ai_limit} 次）"
+    if used >= FREE_AI_LIMIT:
+        return False, f"免費會員 AI 額度已用完（上限 {FREE_AI_LIMIT} 次）"
 
     user["ai_used"] = used + 1
     save_users_db(db)
@@ -3253,17 +2681,6 @@ def build_market_scan_table(market_mode='Stock', lang='zh', limit=30, scan_mode=
     return pd.DataFrame(rows)
 
 
-
-def build_stock_market_scan_table(stock_market='TW', lang='zh', limit=30, scan_mode='core'):
-    rows = []
-    symbols = _build_stock_scan_symbols(scan_mode=scan_mode, market=stock_market)
-    symbols = symbols[:max(limit, 30)]
-    for sym in symbols:
-        row = analyze_market_symbol(sym, market_mode='Stock', lang=lang)
-        if row:
-            rows.append(row)
-    return pd.DataFrame(rows)
-
 def apply_screener_option(df, option_name, market_mode='Stock', lang='zh'):
     if df.empty:
         return df
@@ -3553,79 +2970,6 @@ def run_ai_today_opportunities(api_key, scan_mode='core', market='TW', lang='zh'
     return pd.DataFrame(rows).sort_values(score_col, ascending=False)
 
 
-def run_ai_today_opportunities_crypto(api_key, scan_mode='core', lang='zh'):
-    crypto_df = build_today_opportunities_table(market_mode='Crypto', lang=lang, scan_mode=scan_mode, limit=8)
-    if crypto_df is None or crypto_df.empty:
-        return pd.DataFrame()
-
-    symbol_col = tr('col_symbol', lang)
-    name_col = '名稱' if lang == 'zh' else 'Name'
-    price_col = tr('col_price', lang)
-    change_col = '漲跌幅' if lang == 'zh' else 'Change %'
-    score_col = '訊號分數' if lang == 'zh' else 'Signal Score'
-    reason_col = '機會原因' if lang == 'zh' else 'Opportunity Reason'
-    funding_col = 'Funding Rate'
-    ratio_col = 'Bybit 多空比' if 'Bybit 多空比' in crypto_df.columns else None
-
-    candidates = []
-    for _, row in crypto_df.head(8).iterrows():
-        candidates.append({
-            'symbol': str(row.get(symbol_col, '')).strip().upper(),
-            'name': str(row.get(name_col, row.get(symbol_col, ''))),
-            'price': row.get(price_col),
-            'change_pct': row.get(change_col),
-            'score': row.get(score_col),
-            'reason': str(row.get(reason_col, '')),
-            'funding': row.get(funding_col),
-            'ratio': row.get(ratio_col) if ratio_col else None,
-        })
-    if not candidates:
-        return pd.DataFrame()
-
-    lines = []
-    for idx, item in enumerate(candidates, 1):
-        lines.append(
-            f"{idx}. {item['name']} ({item['symbol']})｜價格={item['price']}｜漲跌幅={item['change_pct']}｜技術分數={item['score']}｜Funding={item['funding']}｜多空比={item['ratio']}｜規則理由={item['reason']}"
-        )
-
-    prompt = (
-        "你是保守型加密貨幣交易分析研究員。以下是已先用規則預篩過的 Crypto 候選標的。\n"
-        "請依照動能、突破品質、量能、Funding 情緒、多空比偏離與風險報酬，給每檔 0~100 的綜合評分。\n"
-        "只回傳嚴格 JSON，格式如下：\n"
-        '{"results":[{"symbol":"BTCUSDT","score":82,"reason":"...","risk":"..."}]}\n'
-        "最多只保留 5 檔，依分數高到低排序。\n"
-        "候選清單：\n" + "\n".join(lines)
-    )
-
-    client = genai.Client(api_key=api_key)
-    resp = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-    payload = _extract_json_from_text(getattr(resp, 'text', ''))
-    if not payload or not isinstance(payload.get('results'), list):
-        return pd.DataFrame()
-
-    candidate_map = {str(c['symbol']).upper(): c for c in candidates}
-    rows = []
-    for item in payload.get('results', [])[:5]:
-        symbol = str(item.get('symbol', '')).strip().upper()
-        cand = candidate_map.get(symbol)
-        if not cand:
-            continue
-        rows.append({
-            name_col: cand['name'],
-            tr('col_symbol', lang): cand['symbol'],
-            tr('col_price', lang): cand['price'],
-            change_col: cand['change_pct'],
-            ('AI綜合評分' if lang == 'zh' else 'AI Composite Score'): item.get('score'),
-            ('AI分析理由' if lang == 'zh' else 'AI Reason'): str(item.get('reason', '')),
-            ('風險提醒' if lang == 'zh' else 'Risk Note'): str(item.get('risk', '')),
-        })
-    if not rows:
-        return pd.DataFrame()
-    out = pd.DataFrame(rows)
-    ai_col = 'AI綜合評分' if lang == 'zh' else 'AI Composite Score'
-    return out.sort_values(ai_col, ascending=False)
-
-
 # =========================
 # Sidebar
 # =========================
@@ -3675,59 +3019,43 @@ with st.sidebar:
     st.caption("Crypto 模式請輸入 BTCUSDT、ETHUSDT 這類 Bybit 合約代號。")
 
     with st.expander("會員 / Membership", expanded=True):
-        tab_login, tab_register = st.tabs(["登入", "註冊"])
+        member_username = st.text_input("帳號 / Username", key="member_username")
+        member_password = st.text_input("密碼 / Password", type="password", key="member_password")
+        l1, l2, l3 = st.columns(3)
 
-        with tab_login:
-            login_username = st.text_input("帳號 / Username", key="login_username")
-            login_password = st.text_input("密碼 / Password", type="password", key="login_password")
-            l1, l2 = st.columns(2)
-            with l1:
-                if st.button("登入 / Login"):
-                    auth, err = authenticate_member(login_username, login_password)
-                    if auth:
-                        st.session_state["member_user"] = auth["username"]
-                        st.success(f"已登入：{auth['username']}")
-                    else:
-                        st.error(err or "登入失敗")
-            with l2:
-                if st.button("登出 / Logout"):
-                    st.session_state.pop("member_user", None)
-                    st.success("已登出")
+        with l1:
+            if st.button("登入 / Login"):
+                auth = authenticate_member(member_username, member_password)
+                if auth:
+                    st.session_state["member_user"] = auth["username"]
+                    st.success(f"已登入：{auth['username']}")
+                else:
+                    st.error("登入失敗")
 
-        with tab_register:
-            reg_username = st.text_input("註冊帳號 / Username", key="reg_username")
-            reg_email = st.text_input("Email", key="reg_email")
-            reg_password = st.text_input("註冊密碼 / Password", type="password", key="reg_password")
-            reg_confirm_password = st.text_input("確認密碼 / Confirm Password", type="password", key="reg_confirm_password")
-            reg_invite_code = st.text_input("註冊碼 / Invite Code（若有啟用）", key="reg_invite_code")
-            if st.button("建立免費帳號 / Register"):
-                ok, msg = register_member(
-                    reg_username,
-                    reg_password,
-                    email=reg_email,
-                    confirm_password=reg_confirm_password,
-                    invite_code=reg_invite_code,
-                )
+        with l2:
+            if st.button("註冊 / Register"):
+                ok, msg = register_member(member_username, member_password)
                 if ok:
                     st.success(msg)
                 else:
                     st.error(msg)
-            st.caption("免費方案建議採一個 Email 一個帳號。若有設定註冊碼，必須輸入正確註冊碼才能建立新帳號。")
+
+        with l3:
+            if st.button("登出 / Logout"):
+                st.session_state.pop("member_user", None)
+                st.success("已登出")
 
         current_member = st.session_state.get("member_user")
         if current_member:
             usage = get_ai_usage_info(current_member)
-            record = get_member_record(current_member) or {}
-            email_text = record.get("email", "")
             if usage["unlimited"]:
                 st.info(f"目前會員：{current_member}｜管理者｜AI 無限")
             else:
-                st.info(f"目前會員：{current_member}｜{get_plan_label(record.get('plan', 'free'), lang)}｜Email：{email_text}｜AI剩餘 {usage['remaining']} / {FREE_AI_LIMIT} 次")
+                st.info(f"目前會員：{current_member}｜免費版剩餘 {usage['remaining']} / {FREE_AI_LIMIT} 次")
         else:
             st.warning("尚未登入會員，AI 功能不開放。")
 
         st.caption(f"預設管理者帳號：{DEFAULT_ADMIN_USERNAME}（建議用環境變數改密碼）")
-        st.caption("防濫用建議：限制一個 Email 只能註冊一個免費帳號，並啟用註冊碼、登入失敗鎖定。")
 
     colw1, colw2 = st.columns(2)
     with colw1:
@@ -3750,66 +3078,7 @@ with st.sidebar:
 st.title(tr("app_title", lang))
 st.caption(tr("app_caption", lang))
 
-stripe_session_id = st.query_params.get("stripe_session_id")
-if stripe_session_id and st.session_state.get("member_user"):
-    ok, msg = sync_checkout_session_to_member(stripe_session_id)
-    if ok:
-        st.success(msg)
-        try:
-            del st.query_params["stripe_session_id"]
-        except Exception:
-            pass
-    else:
-        st.warning(f"Stripe 同步失敗：{msg}" if lang == "zh" else f"Stripe sync failed: {msg}")
 
-header_left, header_right = st.columns([4.3, 1.2])
-
-with header_right:
-    current_member_header = st.session_state.get("member_user")
-
-    if current_member_header:
-        with st.popover(f"👤 {current_member_header}"):
-            render_member_profile_card(current_member_header, lang=lang)
-
-            rec = get_member_record(current_member_header) or {}
-            current_email = rec.get("email", "")
-            has_billing = bool(rec.get("stripe_customer_id") or rec.get("stripe_subscription_id"))
-
-            if st.button("同步 Stripe", key="btn_sync_stripe_header", use_container_width=True):
-                if has_billing:
-                    ok, msg = sync_member_from_stripe_customer(current_member_header)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.warning(msg)
-                else:
-                    st.caption("尚未綁定付款資料")
-
-            if has_billing:
-                portal_url, err = create_customer_portal_url(current_member_header)
-                if portal_url:
-                    st.link_button("管理訂閱", portal_url, use_container_width=True)
-                else:
-                    st.warning(err)
-            else:
-                if stripe_is_ready():
-                    checkout_url, err = create_checkout_session_for_plan(
-                        current_member_header,
-                        current_email,
-                        "pro_monthly"
-                    )
-                    if checkout_url:
-                        st.link_button("立即升級", checkout_url, use_container_width=True)
-                    else:
-                        st.warning(err)
-                else:
-                    st.caption("付款功能尚未設定完成")
-
-            if st.button("登出", key="btn_logout_header", use_container_width=True):
-                st.session_state["member_user"] = None
-                st.rerun()
-    else:
-        st.button("👤 會員", disabled=True, use_container_width=True)
 # =========================
 # Market Opportunity Scanner
 # =========================
@@ -3963,10 +3232,8 @@ if symbol:
         with tab1:
             left, right = st.columns([2.2, 1])
 
-            with st.expander("📊 圖表與關鍵摘要", expanded=True):
-
-                # 主要技術圖
-                st.markdown(f"### {plain_title(tr('main_chart', lang))}")
+            with left:
+                st.markdown(tr("main_chart", lang))
 
                 charts = build_tv_charts(
                     data["hist"],
@@ -3984,534 +3251,392 @@ if symbol:
                     height=980 if (show_macd or show_rsi) else 640
                 )
 
-                # 關鍵摘要
-                st.markdown(f"### {plain_title(tr('key_summary', lang))}")
+            with right:
+                st.markdown(tr("key_summary", lang))
+                st.metric(tr("support", lang), fmt_value(data["support"]))
+                st.metric(tr("resistance", lang), fmt_value(data["resistance"]))
+                st.metric(tr("target_up", lang), fmt_value(data["target_up"]))
+                st.metric(tr("target_down", lang), fmt_value(data["target_down"]))
+                st.metric("RSI", fmt_value(latest["RSI"]))
+                st.metric("MACD", fmt_value(latest["MACD"]))
+                st.metric(tr("volume", lang), fmt_large_num(latest["Volume"]))
 
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.metric(tr("support", lang), fmt_value(data["support"]))
-                    st.metric(tr("target_up", lang), fmt_value(data["target_up"]))
-
-                with col2:
-                    st.metric(tr("resistance", lang), fmt_value(data["resistance"]))
-                    st.metric(tr("target_down", lang), fmt_value(data["target_down"]))
-
-                with col3:
-                    st.metric("RSI", fmt_value(latest["RSI"]))
-                    st.metric("MACD", fmt_value(latest["MACD"]))
-                    st.metric(tr("volume", lang), fmt_large_num(latest["Volume"]))
-
-                # 技術型態
-                st.markdown(f"### {plain_title(tr('pattern_detect', lang))}")
+                st.markdown(tr("pattern_detect", lang))
                 for p in quick_summary["patterns"]:
                     st.write(f"• {pattern_text(p, lang)}")
 
-                # 多方理由
-                st.markdown(f"### {plain_title(tr('bull_reasons', lang))}")
+                st.markdown(tr("bull_reasons", lang))
                 for item in quick_summary["bullish"]:
                     st.write(f"• {item}")
 
-                # 空方理由
-                st.markdown(f"### {plain_title(tr('bear_reasons', lang))}")
+                st.markdown(tr("bear_reasons", lang))
                 for item in quick_summary["bearish"]:
                     st.write(f"• {item}")
-            
-            with st.expander(plain_title(tr("multi_timeframe", lang)), expanded=True):
-                mtf_df = get_multi_timeframe_summary(symbol, lang=lang, market_mode=market_mode)
-                st.dataframe(mtf_df, width="stretch", hide_index=True)
 
-            with st.expander(plain_title(tr("signal_table", lang)), expanded=True):
-                signal_df = generate_signal_table(data["hist"], data["support"], data["resistance"], lang=lang)
-                st.dataframe(signal_df, width="stretch", hide_index=True)
+            st.markdown(tr("multi_timeframe", lang))
+            mtf_df = get_multi_timeframe_summary(symbol, lang=lang)
+            st.dataframe(mtf_df, width="stretch", hide_index=True)
+
+            st.markdown(tr("signal_table", lang))
+            signal_df = generate_signal_table(data["hist"], data["support"], data["resistance"], lang=lang)
+            st.dataframe(signal_df, width="stretch", hide_index=True)
 
             if st.session_state.watchlist:
-                with st.expander(plain_title(tr("watchlist_overview", lang)), expanded=False):
-                    watch_df = build_watchlist_table(st.session_state.watchlist, lang=lang)
-                    if not watch_df.empty:
-                        st.dataframe(watch_df, width="stretch", hide_index=True)
+                st.markdown(tr("watchlist_overview", lang))
+                watch_df = build_watchlist_table(st.session_state.watchlist, lang=lang)
+                if not watch_df.empty:
+                    st.dataframe(watch_df, width="stretch", hide_index=True)
 
-            with st.expander(plain_title(tr("today_opportunities", lang)), expanded=True):
-                if market_mode == "Crypto":
-                    st.markdown("#### 🔎 即時掃描雷達" if lang == "zh" else "#### 🔎 Live Market Radar")
-                    st.caption("先用明確技術條件快速掃出值得先看的名單，不消耗 AI 額度。" if lang == "zh" else "Quickly surfaces trade setups using clear technical rules, without consuming AI quota.")
-                    crypto_op_df = build_today_opportunities_table(market_mode="Crypto", lang=lang, scan_mode=scan_mode, limit=10)
-                    if crypto_op_df.empty:
-                        st.caption("今天沒有掃描到明顯 Crypto 機會。" if lang == "zh" else "No clear crypto opportunities were found today.")
-                    else:
-                        st.dataframe(crypto_op_df, width="stretch", hide_index=True)
+            st.markdown(tr("today_opportunities", lang))
 
-                    st.markdown("#### 🤖 AI 精選觀察名單" if lang == "zh" else "#### 🤖 AI Curated Watchlist")
-                    st.caption("先經過規則預篩，再由 AI 依動能、量價與風險報酬排序，適合拿來挑今天優先研究的標的。" if lang == "zh" else "Prefiltered by rules first, then ranked by AI using momentum, price-volume structure, and risk/reward.")
-                    current_member = st.session_state.get("member_user")
-                    if current_member:
-                        try:
-                            rem = remaining_ai_quota(current_member)
-                            rem_text = "無限" if rem is None else str(rem)
-                            st.caption((f"目前 AI 剩餘次數：{rem_text}（與 AI 報告共用）") if lang == "zh" else (f"AI quota remaining: {rem_text} (shared with AI reports)"))
-                        except Exception:
-                            pass
-                    else:
-                        st.caption("請先登入會員後再使用 AI 今日機會。" if lang == "zh" else "Please log in to use AI opportunities.")
-
-                    if st.button("開始 AI 分析 Crypto 今日機會" if lang == "zh" else "Run AI for Crypto opportunities", key="btn_ai_today_crypto"):
-                        if not current_member:
-                            st.error("請先登入會員" if lang == "zh" else "Please log in first")
-                        elif not api_key:
-                            st.error(tr("enter_api_key", lang))
-                        else:
-                            ok, err = consume_ai_quota(current_member)
-                            if not ok:
-                                st.error(err)
-                            else:
-                                try:
-                                    with st.spinner("AI 正在分析 Crypto 今日機會..." if lang == "zh" else "AI is analyzing crypto opportunities..."):
-                                        st.session_state["ai_today_crypto_df"] = run_ai_today_opportunities_crypto(api_key, scan_mode=scan_mode, lang=lang)
-                                except Exception as e:
-                                    st.error(f"AI 今日機會生成失敗：{e}" if lang == "zh" else f"AI opportunities failed: {e}")
-                    crypto_ai_df = st.session_state.get("ai_today_crypto_df")
-                    if isinstance(crypto_ai_df, pd.DataFrame) and not crypto_ai_df.empty:
-                        st.dataframe(crypto_ai_df, width="stretch", hide_index=True)
+            if market_mode == "Crypto":
+                crypto_op_df = build_today_opportunities_table(market_mode="Crypto", lang=lang, scan_mode=scan_mode, limit=10)
+                if crypto_op_df.empty:
+                    st.caption("今天沒有掃描到明顯 Crypto 機會。" if lang == "zh" else "No clear crypto opportunities were found today.")
                 else:
-                    st.markdown("#### 🔎 即時掃描雷達" if lang == "zh" else "#### 🔎 Live Market Radar")
-                    st.caption("先用明確技術條件快速掃出值得先看的名單，不消耗 AI 額度。" if lang == "zh" else "Quickly surfaces trade setups using clear technical rules, without consuming AI quota.")
-
-                    op_left, op_right = st.columns(2)
-                    with op_left:
-                        st.caption("台股" if lang == "zh" else "Taiwan")
-                        tw_op_df = build_today_opportunities_table(market_mode="Stock", lang=lang, scan_mode=scan_mode, limit=10, stock_market='TW')
-                        if not tw_op_df.empty:
-                            st.dataframe(tw_op_df, width="stretch", hide_index=True)
-                        else:
-                            st.caption(tr("no_tw_opportunities", lang))
-                    with op_right:
-                        st.caption("美股" if lang == "zh" else "US")
-                        us_op_df = build_today_opportunities_table(market_mode="Stock", lang=lang, scan_mode=scan_mode, limit=10, stock_market='US')
-                        if not us_op_df.empty:
-                            st.dataframe(us_op_df, width="stretch", hide_index=True)
-                        else:
-                            st.caption(tr("no_us_opportunities", lang))
-
-                    st.markdown("#### 🤖 AI 精選觀察名單" if lang == "zh" else "#### 🤖 AI Curated Watchlist")
-                    st.caption("先經過規則預篩，再由 AI 依動能、量價與風險報酬排序，適合拿來挑今天優先研究的標的。" if lang == "zh" else "Prefiltered by rules first, then ranked by AI using momentum, price-volume structure, and risk/reward.")
-
-                    current_member = st.session_state.get("member_user")
-                    if current_member:
-                        try:
-                            rem = remaining_ai_quota(current_member)
-                            rem_text = "無限" if rem is None else str(rem)
-                            st.caption((f"目前 AI 剩餘次數：{rem_text}（與 AI 報告共用）") if lang == "zh" else (f"AI quota remaining: {rem_text} (shared with AI reports)"))
-                        except Exception:
-                            pass
-                    else:
-                        st.caption("請先登入會員後再使用 AI 今日機會。" if lang == "zh" else "Please log in to use AI opportunities.")
-
-                    ai_c1, ai_c2 = st.columns(2)
-                    with ai_c1:
-                        if st.button("開始 AI 分析台股今日機會" if lang == "zh" else "Run AI for Taiwan opportunities", key="btn_ai_today_tw"):
-                            if not current_member:
-                                st.error("請先登入會員" if lang == "zh" else "Please log in first")
-                            elif not api_key:
-                                st.error(tr("enter_api_key", lang))
-                            else:
-                                ok, err = consume_ai_quota(current_member)
-                                if not ok:
-                                    st.error(err)
-                                else:
-                                    try:
-                                        with st.spinner("AI 正在分析台股今日機會..." if lang == "zh" else "AI is analyzing Taiwan opportunities..."):
-                                            st.session_state["ai_today_tw_df"] = run_ai_today_opportunities(api_key, scan_mode=scan_mode, market='TW', lang=lang)
-                                    except Exception as e:
-                                        st.error(f"AI 今日機會生成失敗：{e}" if lang == "zh" else f"AI opportunities failed: {e}")
-                        tw_ai_df = st.session_state.get("ai_today_tw_df")
-                        if isinstance(tw_ai_df, pd.DataFrame) and not tw_ai_df.empty:
-                            st.dataframe(tw_ai_df, width="stretch", hide_index=True)
-
-                    with ai_c2:
-                        if st.button("開始 AI 分析美股今日機會" if lang == "zh" else "Run AI for US opportunities", key="btn_ai_today_us"):
-                            if not current_member:
-                                st.error("請先登入會員" if lang == "zh" else "Please log in first")
-                            elif not api_key:
-                                st.error(tr("enter_api_key", lang))
-                            else:
-                                ok, err = consume_ai_quota(current_member)
-                                if not ok:
-                                    st.error(err)
-                                else:
-                                    try:
-                                        with st.spinner("AI 正在分析美股今日機會..." if lang == "zh" else "AI is analyzing US opportunities..."):
-                                            st.session_state["ai_today_us_df"] = run_ai_today_opportunities(api_key, scan_mode=scan_mode, market='US', lang=lang)
-                                    except Exception as e:
-                                        st.error(f"AI 今日機會生成失敗：{e}" if lang == "zh" else f"AI opportunities failed: {e}")
-                        us_ai_df = st.session_state.get("ai_today_us_df")
-                        if isinstance(us_ai_df, pd.DataFrame) and not us_ai_df.empty:
-                            st.dataframe(us_ai_df, width="stretch", hide_index=True)
+                    st.dataframe(crypto_op_df, width="stretch", hide_index=True)
+            else:
+                tw_op_df = build_today_opportunities_table(market_mode="Stock", lang=lang, scan_mode=scan_mode, limit=10)
+                if not tw_op_df.empty:
+                    st.dataframe(tw_op_df, width="stretch", hide_index=True)
+                else:
+                    st.caption(tr("no_tw_opportunities", lang))
 
         # =========================
         # Tab 2: Technical
         # =========================
         with tab2:
-            with st.expander(plain_title(tr("tech_interpret", lang)), expanded=True):
-                c1, c2, c3 = st.columns(3)
+            c1, c2, c3 = st.columns(3)
 
-                c1.metric("MA20", fmt_value(latest["MA20"]))
-                c1.metric("MA60", fmt_value(latest["MA60"]))
-                c1.metric(tr("close", lang), fmt_value(latest["Close"]))
+            c1.metric("MA20", fmt_value(latest["MA20"]))
+            c1.metric("MA60", fmt_value(latest["MA60"]))
+            c1.metric(tr("close", lang), fmt_value(latest["Close"]))
 
-                c2.metric("RSI", fmt_value(latest["RSI"]))
-                c2.metric("MACD", fmt_value(latest["MACD"]))
-                c2.metric("Signal", fmt_value(latest["MACD_SIGNAL"]))
+            c2.metric("RSI", fmt_value(latest["RSI"]))
+            c2.metric("MACD", fmt_value(latest["MACD"]))
+            c2.metric("Signal", fmt_value(latest["MACD_SIGNAL"]))
 
-                c3.metric("MACD Hist", fmt_value(latest["MACD_HIST"]))
-                c3.metric(tr("volume", lang), fmt_large_num(latest["Volume"]))
-                c3.metric(tr("ma20_avg_vol", lang), fmt_large_num(data["hist"]["Volume"].rolling(20).mean().iloc[-1]))
+            c3.metric("MACD Hist", fmt_value(latest["MACD_HIST"]))
+            c3.metric(tr("volume", lang), fmt_large_num(latest["Volume"]))
+            c3.metric(tr("ma20_avg_vol", lang), fmt_large_num(data["hist"]["Volume"].rolling(20).mean().iloc[-1]))
 
-                st.write(f"- {tr('trend_rating', lang)}：{quick_summary['trend']}")
-                st.write(f"- {tr('support_resistance', lang)}：{fmt_value(data['support'])} / {fmt_value(data['resistance'])}")
-                st.write(f"- {tr('bull_strength', lang)}：{data['bull']}%")
-                st.write(f"- {tr('bear_strength', lang)}：{data['bear']}%")
-                st.write(f"- {tr('pattern', lang)}：{' / '.join([pattern_text(p, lang) for p in quick_summary['patterns']])}")
-                st.write(f"- {tr('tech_note', lang)}")
+            st.markdown(tr("tech_interpret", lang))
+            st.write(f"- {tr('trend_rating', lang)}：{quick_summary['trend']}")
+            st.write(f"- {tr('support_resistance', lang)}：{fmt_value(data['support'])} / {fmt_value(data['resistance'])}")
+            st.write(f"- {tr('bull_strength', lang)}：{data['bull']}%")
+            st.write(f"- {tr('bear_strength', lang)}：{data['bear']}%")
+            st.write(f"- {tr('pattern', lang)}：{' / '.join([pattern_text(p, lang) for p in quick_summary['patterns']])}")
+            st.write(f"- {tr('tech_note', lang)}")
 
-                if market_mode == "Crypto":
-                    with st.expander("Crypto 衍生品數據", expanded=True):
-                        d1, d2, d3, d4 = st.columns(4)
-                        d1.metric("Bybit Funding", fmt_ratio(data.get("funding_rate"), default="N/A"))
-                        d2.metric("Open Interest", fmt_large_num(data.get("open_interest")))
-                        d3.metric("24H Turnover", fmt_large_num(data.get("turnover24h")))
-                        d4.metric("24H Volume", fmt_large_num(data.get("volume24h")))
+            if market_mode == "Crypto":
+                st.markdown("### Crypto 衍生品數據")
+                d1, d2, d3, d4 = st.columns(4)
+                d1.metric("Bybit Funding", fmt_ratio(data.get("funding_rate"), default="N/A"))
+                d2.metric("Open Interest", fmt_large_num(data.get("open_interest")))
+                d3.metric("24H Turnover", fmt_large_num(data.get("turnover24h")))
+                d4.metric("24H Volume", fmt_large_num(data.get("volume24h")))
 
-                        bybit_ratio, bybit_ratio_df = get_latest_bybit_long_short_ratio(data.get("symbol_used"), period="4h")
-                        st.metric("Bybit 多空比(4H)", fmt_value(bybit_ratio, digits=4))
+                bybit_ratio, bybit_ratio_df = get_latest_bybit_long_short_ratio(data.get("symbol_used"), period="4h")
+                st.metric("Bybit 多空比(4H)", fmt_value(bybit_ratio, digits=4))
 
-                        if coinglass_api_key:
-                            base_symbol = crypto_base_asset(data.get("symbol_used"))
-                            oi_df = fetch_coinglass_open_interest_exchange_list(base_symbol, coinglass_api_key)
-                            ls_df = fetch_coinglass_global_account_ratio(base_symbol, coinglass_api_key)
-                            top_ls_df = fetch_coinglass_top_account_ratio(base_symbol, coinglass_api_key)
-                            liq_df = fetch_coinglass_liquidation_history(base_symbol, coinglass_api_key)
+                if coinglass_api_key:
+                    base_symbol = crypto_base_asset(data.get("symbol_used"))
+                    oi_df = fetch_coinglass_open_interest_exchange_list(base_symbol, coinglass_api_key)
+                    ls_df = fetch_coinglass_global_account_ratio(base_symbol, coinglass_api_key)
+                    top_ls_df = fetch_coinglass_top_account_ratio(base_symbol, coinglass_api_key)
+                    liq_df = fetch_coinglass_liquidation_history(base_symbol, coinglass_api_key)
 
-                            latest_global_ratio = _latest_numeric_value(ls_df, ["ratio", "longshort", "long/short"])
-                            latest_top_ratio = _latest_numeric_value(top_ls_df, ["ratio", "longshort", "long/short"])
-                            latest_oi = _latest_numeric_value(oi_df, ["openinterest", "open interest", "oi"])
+                    latest_global_ratio = _latest_numeric_value(ls_df, ["ratio", "longshort", "long/short"])
+                    latest_top_ratio = _latest_numeric_value(top_ls_df, ["ratio", "longshort", "long/short"])
+                    latest_oi = _latest_numeric_value(oi_df, ["openinterest", "open interest", "oi"])
 
-                            has_cg_metric = any(x is not None for x in [latest_global_ratio, latest_top_ratio, latest_oi])
-                            if has_cg_metric:
-                                st.markdown("#### CoinGlass 補充資料")
-                                s1, s2, s3 = st.columns(3)
-                                s1.metric("CoinGlass 多空帳戶比", fmt_value(latest_global_ratio, digits=4))
-                                s2.metric("CoinGlass 大戶多空比", fmt_value(latest_top_ratio, digits=4))
-                                s3.metric("CoinGlass 總持倉", fmt_large_num(latest_oi))
+                    has_cg_metric = any(x is not None for x in [latest_global_ratio, latest_top_ratio, latest_oi])
+                    if has_cg_metric:
+                        st.markdown("#### CoinGlass 補充資料")
+                        s1, s2, s3 = st.columns(3)
+                        s1.metric("CoinGlass 多空帳戶比", fmt_value(latest_global_ratio, digits=4))
+                        s2.metric("CoinGlass 大戶多空比", fmt_value(latest_top_ratio, digits=4))
+                        s3.metric("CoinGlass 總持倉", fmt_large_num(latest_oi))
 
-                            liq_summary = build_coinglass_liquidation_summary(liq_df)
-                            if liq_summary:
-                                st.markdown("#### 爆倉摘要")
-                                cols = st.columns(4)
-                                for idx, label in enumerate(["1H", "4H", "12H", "24H"]):
-                                    item = liq_summary.get(label, {})
-                                    with cols[idx]:
-                                        st.metric(f"{label} 爆倉", fmt_large_num(item.get("total")))
-                                        st.caption(f"多單 {fmt_large_num(item.get('long'))} / 空單 {fmt_large_num(item.get('short'))}")
+                    liq_summary = build_coinglass_liquidation_summary(liq_df)
+                    if liq_summary:
+                        st.markdown("#### 爆倉摘要")
+                        cols = st.columns(4)
+                        for idx, label in enumerate(["1H", "4H", "12H", "24H"]):
+                            item = liq_summary.get(label, {})
+                            with cols[idx]:
+                                st.metric(f"{label} 爆倉", fmt_large_num(item.get("total")))
+                                st.caption(f"多單 {fmt_large_num(item.get('long'))} / 空單 {fmt_large_num(item.get('short'))}")
 
-                            if not oi_df.empty:
-                                st.markdown("#### 各交易所持倉")
-                                exchange_col = _pick_first_col(oi_df, ["exchange", "ex"])
-                                oi_col = _pick_first_col(oi_df, ["openinterest", "open interest", "oi"])
-                                price_col = _pick_first_col(oi_df, ["price"])
-                                show_cols = [c for c in [exchange_col, oi_col, price_col] if c and c in oi_df.columns]
-                                if show_cols:
-                                    tmp = oi_df[show_cols].copy()
-                                    rename_map = {}
-                                    if exchange_col:
-                                        rename_map[exchange_col] = "交易所"
-                                    if oi_col:
-                                        rename_map[oi_col] = "持倉"
-                                    if price_col:
-                                        rename_map[price_col] = "價格"
-                                    tmp = tmp.rename(columns=rename_map)
-                                    if "持倉" in tmp.columns:
-                                        tmp["持倉"] = tmp["持倉"].map(fmt_large_num)
-                                    if "價格" in tmp.columns:
-                                        tmp["價格"] = tmp["價格"].map(lambda x: fmt_value(x, digits=4))
-                                    st.dataframe(tmp.head(10), width="stretch", hide_index=True)
+                    if not oi_df.empty:
+                        st.markdown("#### 各交易所持倉")
+                        exchange_col = _pick_first_col(oi_df, ["exchange", "ex"])
+                        oi_col = _pick_first_col(oi_df, ["openinterest", "open interest", "oi"])
+                        price_col = _pick_first_col(oi_df, ["price"])
+                        show_cols = [c for c in [exchange_col, oi_col, price_col] if c and c in oi_df.columns]
+                        if show_cols:
+                            tmp = oi_df[show_cols].copy()
+                            rename_map = {}
+                            if exchange_col:
+                                rename_map[exchange_col] = "交易所"
+                            if oi_col:
+                                rename_map[oi_col] = "持倉"
+                            if price_col:
+                                rename_map[price_col] = "價格"
+                            tmp = tmp.rename(columns=rename_map)
+                            if "持倉" in tmp.columns:
+                                tmp["持倉"] = tmp["持倉"].map(fmt_large_num)
+                            if "價格" in tmp.columns:
+                                tmp["價格"] = tmp["價格"].map(lambda x: fmt_value(x, digits=4))
+                            st.dataframe(tmp.head(10), width="stretch", hide_index=True)
 
-                        if not bybit_ratio_df.empty:
-                            st.markdown("#### Bybit 多空比時間序列")
-                            ratio_col = "longShortRatio" if "longShortRatio" in bybit_ratio_df.columns else _pick_first_col(bybit_ratio_df, ["longshortratio", "ratio"])
-                            time_col = "timestamp_dt" if "timestamp_dt" in bybit_ratio_df.columns else _pick_first_col(bybit_ratio_df, ["_dt", "time", "date"])
-                            cols_to_use = [c for c in [time_col, ratio_col] if c and c in bybit_ratio_df.columns]
-                            if cols_to_use:
-                                tmp = bybit_ratio_df[cols_to_use].tail(8).copy()
-                                if len(cols_to_use) == 2:
-                                    tmp.columns = ["時間", "Bybit 多空比"]
-                                else:
-                                    tmp.columns = ["Bybit 多空比"]
-                                st.dataframe(tmp, width="stretch", hide_index=True)
+                if not bybit_ratio_df.empty:
+                    st.markdown("#### Bybit 多空比時間序列")
+                    ratio_col = "longShortRatio" if "longShortRatio" in bybit_ratio_df.columns else _pick_first_col(bybit_ratio_df, ["longshortratio", "ratio"])
+                    time_col = "timestamp_dt" if "timestamp_dt" in bybit_ratio_df.columns else _pick_first_col(bybit_ratio_df, ["_dt", "time", "date"])
+                    cols_to_use = [c for c in [time_col, ratio_col] if c and c in bybit_ratio_df.columns]
+                    if cols_to_use:
+                        tmp = bybit_ratio_df[cols_to_use].tail(8).copy()
+                        if len(cols_to_use) == 2:
+                            tmp.columns = ["時間", "Bybit 多空比"]
+                        else:
+                            tmp.columns = ["Bybit 多空比"]
+                        st.dataframe(tmp, width="stretch", hide_index=True)
 
-                        if not coinglass_api_key:
-                            st.caption("目前以 Bybit 原生資料顯示 Funding / Open Interest / 多空比；未填 CoinGlass Key 時會隱藏爆倉與跨交易所資料。")
-
+                if not coinglass_api_key:
+                    st.caption("目前以 Bybit 原生資料顯示 Funding / Open Interest / 多空比；未填 CoinGlass Key 時會隱藏爆倉與跨交易所資料。")
 
         # =========================
         # Tab 3: Fundamentals / Peers
         # =========================
         if market_mode != "Crypto":
             with tab3:
-                with st.expander(plain_title(tr("fundamental_observe", lang)), expanded=True):
-                    b1, b2, b3, b4 = st.columns(4)
-                    b1.metric("PE", fmt_value(data["pe"]))
-                    b2.metric("PB", fmt_value(data["pb"]))
-                    b3.metric("EPS", fmt_value(data["eps"]))
-                    b4.metric("ROE", fmt_ratio(data["roe"]))
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("PE", fmt_value(data["pe"]))
+                b2.metric("PB", fmt_value(data["pb"]))
+                b3.metric("EPS", fmt_value(data["eps"]))
+                b4.metric("ROE", fmt_ratio(data["roe"]))
 
-                    b5, b6, b7, b8 = st.columns(4)
-                    b5.metric(tr("gross_margin", lang), fmt_ratio(data["gross"]))
-                    b6.metric(tr("revenue_growth", lang), fmt_ratio(data["revenue"]))
-                    b7.metric(tr("debt_ratio", lang), fmt_value(data["debt"]))
-                    b8.metric(tr("valuation_grade", lang), quick_summary["valuation"])
+                b5, b6, b7, b8 = st.columns(4)
+                b5.metric(tr("gross_margin", lang), fmt_ratio(data["gross"]))
+                b6.metric(tr("revenue_growth", lang), fmt_ratio(data["revenue"]))
+                b7.metric(tr("debt_ratio", lang), fmt_value(data["debt"]))
+                b8.metric(tr("valuation_grade", lang), quick_summary["valuation"])
 
-                    st.write(f"- {tr('valuation_now', lang)}：{quick_summary['valuation']}")
-                    st.write(f"- {tr('quality_status', lang)}：{quality_text(data['data_quality'], lang)}")
-                    st.write(f"- {tr('industry_label', lang)}：{data['display_industry']}")
-                    st.write(f"- {tr('yahoo_backup_note', lang)}")
+                st.markdown(tr("fundamental_observe", lang))
+                st.write(f"- {tr('valuation_now', lang)}：{quick_summary['valuation']}")
+                st.write(f"- {tr('quality_status', lang)}：{quality_text(data['data_quality'], lang)}")
+                st.write(f"- {tr('industry_label', lang)}：{data['display_industry']}")
+                st.write(f"- {tr('yahoo_backup_note', lang)}")
 
-                with st.expander(plain_title(tr("peer_compare", lang)), expanded=True):
-                    manual_peer_symbols = [x.strip().upper() for x in peer_input.split(",") if x.strip()]
-                    peer_symbols = manual_peer_symbols if manual_peer_symbols else auto_find_peers(data, max_peers=5)
+                st.markdown(tr("peer_compare", lang))
+                manual_peer_symbols = [x.strip().upper() for x in peer_input.split(",") if x.strip()]
+                peer_symbols = manual_peer_symbols if manual_peer_symbols else auto_find_peers(data, max_peers=5)
 
-                    peer_df = build_peer_compare_table(peer_symbols, lang=lang, max_items=6)
-                    if not peer_df.empty:
-                        st.dataframe(peer_df, width="stretch", hide_index=True)
-                        if manual_peer_symbols:
-                            st.caption(tr("manual_peer_used", lang))
-                        else:
-                            st.caption(tr("auto_peer_used", lang))
+                peer_df = build_peer_compare_table(peer_symbols, lang=lang, max_items=6)
+                if not peer_df.empty:
+                    st.dataframe(peer_df, width="stretch", hide_index=True)
+                    if manual_peer_symbols:
+                        st.caption(tr("manual_peer_used", lang))
                     else:
-                        st.warning(tr("peer_invalid", lang))
-
-
+                        st.caption(tr("auto_peer_used", lang))
+                else:
+                    st.warning(tr("peer_invalid", lang))
         # =========================
         # Tab 4: Ranking
         # =========================
         with tab4:
-            with st.expander(plain_title(tr("ranking_title", lang)), expanded=True):
-                if market_mode == "Crypto":
-                    st.caption("Crypto 排行榜目前預設為 24H 漲幅榜。" if lang == "zh" else "Crypto ranking currently defaults to 24H gainers.")
-                    crypto_rank_df = build_market_scan_table(market_mode="Crypto", lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
-                    crypto_rank_view = apply_screener_option(crypto_rank_df, "5. 漲幅排行榜", market_mode="Crypto", lang=lang)
-                    if crypto_rank_view.empty:
-                        st.warning("目前沒有可用的 Crypto 排行資料。" if lang == "zh" else "No crypto ranking data available right now.")
-                    else:
-                        st.dataframe(crypto_rank_view, width="stretch", hide_index=True)
-                else:
-                    st.caption("股票排行榜目前預設為漲幅榜，並分成台股與美股。" if lang == "zh" else "Stock ranking defaults to top gainers and is split into Taiwan and US.")
-                    r1, r2 = st.columns(2)
-                    with r1:
-                        st.markdown("#### 台股排行榜" if lang == "zh" else "#### Taiwan ranking")
-                        tw_rank_df = build_stock_market_scan_table(stock_market='TW', lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
-                        tw_rank_view = apply_screener_option(tw_rank_df, "5. 漲幅排行榜", market_mode="Stock", lang=lang)
-                        if tw_rank_view.empty:
-                            st.warning("目前沒有可用的台股排行資料。" if lang == "zh" else "No Taiwan ranking data available right now.")
-                        else:
-                            st.dataframe(tw_rank_view, width="stretch", hide_index=True)
-                    with r2:
-                        st.markdown("#### 美股排行榜" if lang == "zh" else "#### US ranking")
-                        us_rank_df = build_stock_market_scan_table(stock_market='US', lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
-                        us_rank_view = apply_screener_option(us_rank_df, "5. 漲幅排行榜", market_mode="Stock", lang=lang)
-                        if us_rank_view.empty:
-                            st.warning("目前沒有可用的美股排行資料。" if lang == "zh" else "No US ranking data available right now.")
-                        else:
-                            st.dataframe(us_rank_view, width="stretch", hide_index=True)
+            st.markdown(tr("ranking_title", lang))
 
+            if market_mode == "Crypto":
+                st.caption("Crypto 排行榜目前預設為 24H 漲幅榜。" if lang == "zh" else "Crypto ranking currently defaults to 24H gainers.")
+                crypto_rank_df = build_market_scan_table(market_mode="Crypto", lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
+                crypto_rank_view = apply_screener_option(crypto_rank_df, "5. 漲幅排行榜", market_mode="Crypto", lang=lang)
+                if crypto_rank_view.empty:
+                    st.warning("目前沒有可用的 Crypto 排行資料。" if lang == "zh" else "No crypto ranking data available right now.")
+                else:
+                    st.dataframe(crypto_rank_view, width="stretch", hide_index=True)
+            else:
+                st.caption("股票排行榜目前預設為漲幅榜。" if lang == "zh" else "Stock ranking currently defaults to top gainers.")
+                stock_rank_df = build_market_scan_table(market_mode="Stock", lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
+                stock_rank_view = apply_screener_option(stock_rank_df, "5. 漲幅排行榜", market_mode="Stock", lang=lang)
+                if stock_rank_view.empty:
+                    st.warning("目前沒有可用的股票排行資料。" if lang == "zh" else "No stock ranking data available right now.")
+                else:
+                    st.dataframe(stock_rank_view, width="stretch", hide_index=True)
 
         # =========================
         # Tab 5: Screener
         # =========================
         with tab5:
-            with st.expander(plain_title(tr("screener_title", lang)), expanded=True):
-                if market_mode == "Crypto":
-                    crypto_options = [
-                        "1. 30天內成交量爆量1.5倍以上",
-                        "2. 突破30天最高價",
-                        "3. MACD 黃金交叉",
-                        "4. MACD 死亡交叉",
-                        "5. 漲幅排行榜",
-                        "6. 跌幅排行榜",
-                        "7. Funding 最極端",
-                        "8. 多空比偏離最大",
-                    ]
-                    selected_screen = st.multiselect(
-                        "Crypto 選股條件（可複選）" if lang == "zh" else "Crypto screener filters (multi-select)",
-                        crypto_options,
-                        default=["5. 漲幅排行榜"],
-                        key="crypto_screen_options_multi"
-                    )
-                    st.caption("1~4 為篩選條件；5~8 為排序方式。若同時勾多個排序，會以最後一個為主。" if lang == "zh" else "1-4 are filters; 5-8 control sorting. If multiple sorting options are chosen, the last one takes priority.")
-                    crypto_df = build_market_scan_table(market_mode="Crypto", lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
-                    crypto_filtered = apply_multi_screener_options(crypto_df, selected_screen, market_mode="Crypto", lang=lang)
-                    if crypto_filtered.empty:
-                        st.warning("目前沒有符合條件的 Crypto 標的。" if lang == "zh" else "No crypto symbols matched the filters.")
-                    else:
-                        st.dataframe(crypto_filtered, width="stretch", hide_index=True)
-                else:
-                    stock_options = [
-                        "1. 30天內成交量爆量1.5倍以上",
-                        "2. 突破30天最高價",
-                        "3. MACD 黃金交叉",
-                        "4. MACD 死亡交叉",
-                        "5. 漲幅排行榜",
-                        "6. 跌幅排行榜",
-                    ]
-                    s1, s2 = st.columns(2)
-                    with s1:
-                        st.markdown("#### 台股選股器" if lang == "zh" else "#### Taiwan screener")
-                        selected_tw_screen = st.multiselect(
-                            "台股選股條件（可複選）" if lang == "zh" else "Taiwan screener filters (multi-select)",
-                            stock_options,
-                            default=["5. 漲幅排行榜"],
-                            key="stock_screen_options_multi_tw"
-                        )
-                        tw_df = build_stock_market_scan_table(stock_market='TW', lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
-                        tw_filtered = apply_multi_screener_options(tw_df, selected_tw_screen, market_mode="Stock", lang=lang)
-                        if tw_filtered.empty:
-                            st.warning("目前沒有符合條件的台股標的。" if lang == "zh" else "No Taiwan stocks matched the filters.")
-                        else:
-                            st.dataframe(tw_filtered, width="stretch", hide_index=True)
-                    with s2:
-                        st.markdown("#### 美股選股器" if lang == "zh" else "#### US screener")
-                        selected_us_screen = st.multiselect(
-                            "美股選股條件（可複選）" if lang == "zh" else "US screener filters (multi-select)",
-                            stock_options,
-                            default=["5. 漲幅排行榜"],
-                            key="stock_screen_options_multi_us"
-                        )
-                        us_df = build_stock_market_scan_table(stock_market='US', lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
-                        us_filtered = apply_multi_screener_options(us_df, selected_us_screen, market_mode="Stock", lang=lang)
-                        if us_filtered.empty:
-                            st.warning("目前沒有符合條件的美股標的。" if lang == "zh" else "No US stocks matched the filters.")
-                        else:
-                            st.dataframe(us_filtered, width="stretch", hide_index=True)
-                    st.caption("1~4 為篩選條件；5~6 為排序方式。若同時勾多個排序，會以最後一個為主。" if lang == "zh" else "1-4 are filters; 5-6 control sorting. If multiple sorting options are chosen, the last one takes priority.")
+            st.markdown(tr("screener_title", lang))
 
+            if market_mode == "Crypto":
+                crypto_options = [
+                    "1. 30天內成交量爆量1.5倍以上",
+                    "2. 突破30天最高價",
+                    "3. MACD 黃金交叉",
+                    "4. MACD 死亡交叉",
+                    "5. 漲幅排行榜",
+                    "6. 跌幅排行榜",
+                    "7. Funding 最極端",
+                    "8. 多空比偏離最大",
+                ]
+                selected_screen = st.multiselect(
+                    "Crypto 選股條件（可複選）" if lang == "zh" else "Crypto screener filters (multi-select)",
+                    crypto_options,
+                    default=["5. 漲幅排行榜"],
+                    key="crypto_screen_options_multi"
+                )
+                st.caption("1~4 為篩選條件；5~8 為排序方式。若同時勾多個排序，會以最後一個為主。" if lang == "zh" else "1-4 are filters; 5-8 control sorting. If multiple sorting options are chosen, the last one takes priority.")
+                crypto_df = build_market_scan_table(market_mode="Crypto", lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
+                crypto_filtered = apply_multi_screener_options(crypto_df, selected_screen, market_mode="Crypto", lang=lang)
+                if crypto_filtered.empty:
+                    st.warning("目前沒有符合條件的 Crypto 標的。" if lang == "zh" else "No crypto symbols matched the filters.")
+                else:
+                    st.dataframe(crypto_filtered, width="stretch", hide_index=True)
+            else:
+                stock_options = [
+                    "1. 30天內成交量爆量1.5倍以上",
+                    "2. 突破30天最高價",
+                    "3. MACD 黃金交叉",
+                    "4. MACD 死亡交叉",
+                    "5. 漲幅排行榜",
+                    "6. 跌幅排行榜",
+                ]
+                selected_screen = st.multiselect(
+                    "股票選股條件（可複選）" if lang == "zh" else "Stock screener filters (multi-select)",
+                    stock_options,
+                    default=["5. 漲幅排行榜"],
+                    key="stock_screen_options_multi"
+                )
+                st.caption("1~4 為篩選條件；5~6 為排序方式。若同時勾多個排序，會以最後一個為主。" if lang == "zh" else "1-4 are filters; 5-6 control sorting. If multiple sorting options are chosen, the last one takes priority.")
+                stock_df = build_market_scan_table(market_mode="Stock", lang=lang, limit=max(scan_limit, 40), scan_mode=scan_mode)
+                stock_filtered = apply_multi_screener_options(stock_df, selected_screen, market_mode="Stock", lang=lang)
+                if stock_filtered.empty:
+                    st.warning("目前沒有符合條件的股票標的。" if lang == "zh" else "No stock symbols matched the filters.")
+                else:
+                    st.dataframe(stock_filtered, width="stretch", hide_index=True)
 
         # =========================
         # Tab 6: AI
         # =========================
         with tab6:
-            with st.expander(plain_title(tr("ai_quick", lang)), expanded=True):
-                qa, qb = st.columns([1, 1])
+            st.markdown(tr("ai_quick", lang))
 
-                with qa:
-                    if st.button(tr("gen_ai_quick", lang)):
-                        current_member = st.session_state.get("member_user")
-                        if not current_member:
-                            st.error("請先登入會員")
-                        elif not api_key:
-                            st.error(tr("enter_api_key", lang))
+            qa, qb = st.columns([1, 1])
+
+            with qa:
+                if st.button(tr("gen_ai_quick", lang)):
+                    current_member = st.session_state.get("member_user")
+                    if not current_member:
+                        st.error("請先登入會員")
+                    elif not api_key:
+                        st.error(tr("enter_api_key", lang))
+                    else:
+                        ok, err = consume_ai_quota(current_member)
+                        if not ok:
+                            st.error(err)
                         else:
-                            ok, err = consume_ai_quota(current_member)
-                            if not ok:
-                                st.error(err)
-                            else:
-                                try:
-                                    with st.spinner(tr("ai_quick_loading", lang)):
-                                        quick_ai = ai_report(api_key, data, quick_only=True, lang=lang)
-                                    st.session_state["quick_ai_report"] = quick_ai
-                                except Exception as e:
-                                    st.error(f"{tr('ai_quick_failed', lang)}{e}")
+                            try:
+                                with st.spinner(tr("ai_quick_loading", lang)):
+                                    quick_ai = ai_report(api_key, data, quick_only=True, lang=lang)
+                                st.session_state["quick_ai_report"] = quick_ai
+                            except Exception as e:
+                                st.error(f"{tr('ai_quick_failed', lang)}{e}")
 
-                with qb:
-                    if st.button(tr("gen_ai_full", lang)):
-                        current_member = st.session_state.get("member_user")
-                        if not current_member:
-                            st.error("請先登入會員")
-                        elif not api_key:
-                            st.error(tr("enter_api_key", lang))
+            with qb:
+                if st.button(tr("gen_ai_full", lang)):
+                    current_member = st.session_state.get("member_user")
+                    if not current_member:
+                        st.error("請先登入會員")
+                    elif not api_key:
+                        st.error(tr("enter_api_key", lang))
+                    else:
+                        ok, err = consume_ai_quota(current_member)
+                        if not ok:
+                            st.error(err)
                         else:
-                            ok, err = consume_ai_quota(current_member)
-                            if not ok:
-                                st.error(err)
-                            else:
-                                try:
-                                    with st.spinner(tr("ai_full_loading", lang)):
-                                        full_ai = ai_report(api_key, data, quick_only=False, lang=lang)
-                                    st.session_state["full_ai_report"] = full_ai
-                                except Exception as e:
-                                    st.error(f"{tr('ai_full_failed', lang)}{e}")
+                            try:
+                                with st.spinner(tr("ai_full_loading", lang)):
+                                    full_ai = ai_report(api_key, data, quick_only=False, lang=lang)
+                                st.session_state["full_ai_report"] = full_ai
+                            except Exception as e:
+                                st.error(f"{tr('ai_full_failed', lang)}{e}")
 
-                st.markdown(tr("ai_system_conclusion", lang))
-                st.markdown(f"<div class='ai-box'>{local_ai_brief}</div>", unsafe_allow_html=True)
+            st.markdown(tr("ai_system_conclusion", lang))
+            st.markdown(f"<div class='ai-box'>{local_ai_brief}</div>", unsafe_allow_html=True)
 
-                if "quick_ai_report" in st.session_state:
-                    st.markdown(st.session_state["quick_ai_report"])
+            if "quick_ai_report" in st.session_state:
+                st.markdown(st.session_state["quick_ai_report"])
 
-                st.markdown(tr("ai_full", lang))
-                if "full_ai_report" in st.session_state:
-                    st.markdown(st.session_state["full_ai_report"])
-                else:
-                    st.caption(tr("ai_full_caption", lang))
+            st.markdown(tr("ai_full", lang))
+            if "full_ai_report" in st.session_state:
+                st.markdown(st.session_state["full_ai_report"])
+            else:
+                st.caption(tr("ai_full_caption", lang))
 
 
         # =========================
         # Tab 7: Crypto
         # =========================
         with tab7:
-            with st.expander("Bybit USDT 永續｜24H 成交額前 100", expanded=True):
-                st.caption("Bybit API 提供 ticker、24H 成交量、資金費率等市場資料；這裡的前 100 依 24H turnover 排序，不是真正市值排行。")
+            st.markdown("### Bybit USDT 永續｜24H 成交額前 100")
+            st.caption("Bybit API 提供 ticker、24H 成交量、資金費率等市場資料；這裡的前 100 依 24H turnover 排序，不是真正市值排行。")
 
-                crypto_top100 = build_crypto_top100_table(lang=lang)
-                if crypto_top100.empty:
-                    st.warning("目前無法取得 Bybit 資料")
+            crypto_top100 = build_crypto_top100_table(lang=lang)
+            if crypto_top100.empty:
+                st.warning("目前無法取得 Bybit 資料")
+            else:
+                st.dataframe(crypto_top100, width="stretch", hide_index=True)
+
+            if market_mode == "Crypto" and data.get("hist") is not None:
+                cga, cgb, cgc, cgd = st.columns(4)
+                cga.metric("Bybit Funding", fmt_ratio(data.get("funding_rate")))
+                cgb.metric("Open Interest", fmt_large_num(data.get("open_interest")))
+                cgc.metric("24H Turnover", fmt_large_num(data.get("turnover24h")))
+                cgd.metric("24H %", fmt_ratio(data.get("price24hPcnt")))
+
+                base_symbol = crypto_base_asset(data.get("symbol_used"))
+                st.markdown(f"### CoinGlass 資金費率交易所比較｜{base_symbol}")
+                if not coinglass_api_key:
+                    st.info("若要套 CoinGlass 資料，請在左側輸入 CoinGlass API Key。")
                 else:
-                    st.dataframe(crypto_top100, width="stretch", hide_index=True)
-
-                if market_mode == "Crypto" and data.get("hist") is not None:
-                    cga, cgb, cgc, cgd = st.columns(4)
-                    cga.metric("Bybit Funding", fmt_ratio(data.get("funding_rate")))
-                    cgb.metric("Open Interest", fmt_large_num(data.get("open_interest")))
-                    cgc.metric("24H Turnover", fmt_large_num(data.get("turnover24h")))
-                    cgd.metric("24H %", fmt_ratio(data.get("price24hPcnt")))
-
-                    base_symbol = crypto_base_asset(data.get("symbol_used"))
-                    st.markdown(f"### CoinGlass 資金費率交易所比較｜{base_symbol}")
-                    if not coinglass_api_key:
-                        st.info("若要套 CoinGlass 資料，請在左側輸入 CoinGlass API Key。")
+                    cg_df = fetch_coinglass_funding_exchange_list(base_symbol, coinglass_api_key)
+                    if cg_df.empty:
+                        st.warning("CoinGlass 資料目前抓不到，可能是 API Key、額度或欄位格式問題。")
                     else:
-                        cg_df = fetch_coinglass_funding_exchange_list(base_symbol, coinglass_api_key)
-                        if cg_df.empty:
-                            st.warning("CoinGlass 資料目前抓不到，可能是 API Key、額度或欄位格式問題。")
-                        else:
-                            st.dataframe(cg_df, width="stretch", hide_index=True)
-
+                        st.dataframe(cg_df, width="stretch", hide_index=True)
 
         # =========================
         # Tab 8: Debug
         # =========================
         with tab8:
-            with st.expander(plain_title(tr("debug_status", lang)), expanded=False):
-                item_col = tr("status_item", lang)
-                value_col = tr("status_value", lang)
+            st.markdown(tr("debug_status", lang))
 
-                status_rows = [
-                    {item_col: tr("actual_symbol", lang), value_col: data["symbol_used"]},
-                    {item_col: tr("raw_symbol", lang), value_col: data["raw_symbol"]},
-                    {item_col: tr("data_source", lang), value_col: ('Bybit API' if market_mode == 'Crypto' else tr("source_yahoo", lang))},
-                    {item_col: tr("display_interval", lang), value_col: data["interval"]},
-                    {item_col: tr("fetch_interval", lang), value_col: data["fetch_interval"]},
-                    {item_col: tr("fetch_period", lang), value_col: data["period"]},
-                    {item_col: tr("data_quality", lang), value_col: quality_text(data["data_quality"], lang)},
-                    {item_col: "Sector", value_col: data["sector"]},
-                    {item_col: "Industry", value_col: data["industry"]},
-                ]
+            item_col = tr("status_item", lang)
+            value_col = tr("status_value", lang)
 
-                st.dataframe(pd.DataFrame(status_rows), width="stretch", hide_index=True)
+            status_rows = [
+                {item_col: tr("actual_symbol", lang), value_col: data["symbol_used"]},
+                {item_col: tr("raw_symbol", lang), value_col: data["raw_symbol"]},
+                {item_col: tr("data_source", lang), value_col: tr("source_yahoo", lang)},
+                {item_col: tr("display_interval", lang), value_col: data["interval"]},
+                {item_col: tr("fetch_interval", lang), value_col: data["fetch_interval"]},
+                {item_col: tr("fetch_period", lang), value_col: data["period"]},
+                {item_col: tr("data_quality", lang), value_col: quality_text(data["data_quality"], lang)},
+                {item_col: "Sector", value_col: data["sector"]},
+                {item_col: "Industry", value_col: data["industry"]},
+            ]
 
-                st.markdown(tr("debug_errors", lang))
-                if data.get("errors"):
-                    for err in data["errors"]:
-                        st.write(f"- {err}")
-                else:
-                    st.write(tr("no_error", lang))
+            st.dataframe(pd.DataFrame(status_rows), width="stretch", hide_index=True)
+
+            st.markdown(tr("debug_errors", lang))
+            if data.get("errors"):
+                for err in data["errors"]:
+                    st.write(f"- {err}")
+            else:
+                st.write(tr("no_error", lang))
 
     else:
         st.error(tr("no_data", lang))

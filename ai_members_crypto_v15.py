@@ -18,19 +18,47 @@ try:
 except Exception:
     stripe = None
 
+try:
+    import bcrypt
+except Exception:
+    bcrypt = None
+# =========================
+# UI State
+# =========================
+if "selected_symbol" not in st.session_state:
+    st.session_state["selected_symbol"] = "AAPL"
+if "show_subscription_page" not in st.session_state:
+    st.session_state["show_subscription_page"] = False
+
+if "selected_plan_code" not in st.session_state:
+    st.session_state["selected_plan_code"] = None
 # =========================
 # Page Config
 # =========================
 st.set_page_config(page_title="AI Stock Research Platform Pro v2", layout="wide")
+if "lang" not in st.session_state:
+    st.session_state["lang"] = "zh"
+if "show_volume" not in st.session_state:
+    st.session_state["show_volume"] = True
+if "show_macd" not in st.session_state:
+    st.session_state["show_macd"] = True
+if "show_rsi" not in st.session_state:
+    st.session_state["show_rsi"] = False
+if "symbol_input" not in st.session_state:
+    st.session_state["symbol_input"] = st.session_state.get("selected_symbol", "AAPL")
 
+lang = st.session_state["lang"]
 # =========================
 # Language / i18n
 # =========================
 I18N = {
     "zh": {
-        "page_title": "AI股票研究平台 Pro v2",
+        "page_title": "AI股票研究平台",
         "sidebar_title": "⚙️ 控制台",
+        "Language_":"🌐 語言",
         "api_key": "Gemini API Key",
+        "mode": "模式",  
+        "Membership" :"👤 會員",        
         "symbol": "股票代號",
         "interval": "K線週期",
         "show_volume": "顯示成交量",
@@ -47,7 +75,7 @@ I18N = {
         "remove_watchlist": "移除自選",
         "watchlist": "⭐ 自選股",
 
-        "app_title": "📈 AI 股票研究平台",
+        "app_title": "📈 AI 股票研究平台 Pro v2",
         "app_caption": "先看結論，再看理由，最後再看細節；再加上排行、選股、型態與自動同業比較。",
 
         "tab_overview": "總覽",
@@ -177,6 +205,9 @@ I18N = {
         "page_title": "AI Stock Research Platform Pro v2",
         "sidebar_title": "⚙️ Control Panel",
         "api_key": "Gemini API Key",
+        "mode":"Mode",
+        "Language_":"🌐 Language",
+        "Membership":"👤 Membership",  
         "symbol": "Ticker",
         "interval": "Chart Interval",
         "show_volume": "Show Volume",
@@ -1875,24 +1906,58 @@ def build_tv_charts(df, interval="1d", show_volume=True, show_macd=True, show_rs
 
     return charts
 
+def sync_watchlist_from_member():
 
+    username = st.session_state.get("member_user")
+
+    if not username:
+        return
+
+    try:
+        with open("members.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        users = data.get("users", {})
+
+        if username in users:
+            st.session_state["watchlist"] = users[username].get("watchlist", [])
+
+    except Exception as e:
+        print("sync_watchlist error:", e)
+        st.session_state["watchlist"] = []
 # =========================
 # Watchlist Session
 # =========================
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = []
-
+# 若已登入且目前 session watchlist 為空，則從 members.json 載回
+if st.session_state.get("member_user") and not st.session_state.watchlist:
+    sync_watchlist_from_member()
+# ⭐ 登入後同步會員 watchlist
+member_user = st.session_state.get("member_user")
+if member_user and not st.session_state.watchlist:
+    sync_watchlist_from_member()
 
 def add_to_watchlist(symbol):
     symbol = symbol.upper().strip()
-    if symbol and symbol not in st.session_state.watchlist:
+    if not symbol:
+        return
+
+    if symbol not in st.session_state.watchlist:
         st.session_state.watchlist.append(symbol)
+
+    member_user = st.session_state.get("member_user")
+    if member_user:
+        save_member_watchlist(member_user, st.session_state.watchlist)
 
 
 def remove_from_watchlist(symbol):
     st.session_state.watchlist = [s for s in st.session_state.watchlist if s != symbol]
 
-
+    member_user = st.session_state.get("member_user")
+    if member_user:
+        save_member_watchlist(member_user, st.session_state.watchlist)
+        
 def build_watchlist_table(symbols, lang="zh"):
     rows = []
     for sym in symbols:
@@ -1921,6 +1986,22 @@ DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123456")
 REGISTER_INVITE_CODE = os.getenv("REGISTER_INVITE_CODE", "")
 MAX_LOGIN_FAILS = 5
 LOGIN_LOCK_MINUTES = 15
+def get_member_watchlist(username: str):
+    db = load_users_db()
+    user = db.get("users", {}).get(normalize_username(username), {})
+    wl = user.get("watchlist", [])
+    return [str(x).upper().strip() for x in wl if str(x).strip()]
+def save_member_watchlist(username: str, watchlist: list[str]):
+    db = load_users_db()
+    username_key = normalize_username(username)
+    user = db.get("users", {}).get(username_key)
+
+    if not user:
+        return False
+
+    user["watchlist"] = sorted(list(set([str(x).upper().strip() for x in watchlist if str(x).strip()])))
+    save_users_db(db)
+    return True
 
 PLAN_CONFIG = {
     "free": {
@@ -1980,23 +2061,31 @@ PLAN_CONFIG = {
     },
 }
 
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY", "")
-STRIPE_PRICE_6M = os.getenv("STRIPE_PRICE_6M", "")
-STRIPE_PRICE_YEARLY = os.getenv("STRIPE_PRICE_YEARLY", "")
-STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "http://localhost:8501")
-STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", STRIPE_SUCCESS_URL)
-STRIPE_PORTAL_RETURN_URL = os.getenv("STRIPE_PORTAL_RETURN_URL", STRIPE_SUCCESS_URL)
+NEWEBPAY_MERCHANT_ID = os.getenv("NEWEBPAY_MERCHANT_ID", "")
+NEWEBPAY_HASH_KEY = os.getenv("NEWEBPAY_HASH_KEY", "")
+NEWEBPAY_HASH_IV = os.getenv("NEWEBPAY_HASH_IV", "")
+NEWEBPAY_MPG_URL = os.getenv("NEWEBPAY_MPG_URL", "https://ccore.newebpay.com/MPG/mpg_gateway")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8501")
+NEWEBPAY_RETURN_URL = os.getenv("NEWEBPAY_RETURN_URL", APP_BASE_URL)
+NEWEBPAY_NOTIFY_URL = os.getenv("NEWEBPAY_NOTIFY_URL", "")
+NEWEBPAY_CLIENT_BACK_URL = os.getenv("NEWEBPAY_CLIENT_BACK_URL", APP_BASE_URL)
+TWD_EXCHANGE_RATE = float(os.getenv("TWD_EXCHANGE_RATE", "33"))
+ORDERS_DB_FILE = Path("orders.json")
 
-
-import bcrypt
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    if bcrypt:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+        if not password_hash:
+            return False
+        if str(password_hash).startswith("$2") and bcrypt:
+            return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+        return hashlib.sha256(password.encode("utf-8")).hexdigest() == password_hash
     except Exception:
         return False
 
@@ -2026,372 +2115,238 @@ def fmt_member_datetime(value, lang: str = "zh") -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-def get_stripe_price_id(plan_code: str) -> str:
+def load_orders_db():
+    if ORDERS_DB_FILE.exists():
+        try:
+            data = json.loads(ORDERS_DB_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("orders"), dict):
+                return data
+        except Exception:
+            pass
+    return {"orders": {}}
+
+
+def save_orders_db(db):
+    ORDERS_DB_FILE.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def newebpay_is_ready() -> bool:
+    return bool(NEWEBPAY_MERCHANT_ID and NEWEBPAY_HASH_KEY and NEWEBPAY_HASH_IV and NEWEBPAY_MPG_URL)
+
+
+def get_plan_days(plan_code: str) -> int:
     return {
-        "pro_monthly": STRIPE_PRICE_MONTHLY,
-        "pro_6m": STRIPE_PRICE_6M,
-        "pro_yearly": STRIPE_PRICE_YEARLY,
-    }.get(plan_code, "")
+        "pro_monthly": 30,
+        "pro_6m": 180,
+        "pro_yearly": 365,
+    }.get(plan_code, 30)
 
 
-def stripe_is_ready() -> bool:
-    return bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_MONTHLY and STRIPE_PRICE_6M and STRIPE_PRICE_YEARLY)
+def get_plan_amount_twd(plan_code: str) -> int:
+    meta = get_plan_meta(plan_code)
+    usd_total = float(meta.get("price_total", 0) or 0)
+    return max(int(round(usd_total * TWD_EXCHANGE_RATE)), 1)
 
 
-def create_checkout_session_for_plan(username: str, email: str, plan_code: str):
-    if not stripe:
-        return None, "尚未安裝 stripe 套件，請先執行 pip install stripe"
-    if not STRIPE_SECRET_KEY:
-        return None, "尚未設定 STRIPE_SECRET_KEY"
-    price_id = get_stripe_price_id(plan_code)
-    if not price_id:
-        return None, f"尚未設定 {plan_code} 對應的 Stripe Price ID"
-
-    stripe.api_key = STRIPE_SECRET_KEY
-    try:
-        session = stripe.checkout.Session.create(
-            mode="subscription",
-            line_items=[{"price": price_id, "quantity": 1}],
-            success_url=f"{STRIPE_SUCCESS_URL}?stripe_session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=STRIPE_CANCEL_URL,
-            customer_email=(email or None),
-            client_reference_id=normalize_username(username),
-            metadata={
-                "app_username": normalize_username(username),
-                "app_plan_code": plan_code,
-            },
-            allow_promotion_codes=True,
-        )
-        return session.url, None
-    except Exception as e:
-        return None, str(e)
+def _pkcs7_pad(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    pad_len = 16 - (len(raw) % 16)
+    return raw + bytes([pad_len] * pad_len)
 
 
-def sync_checkout_session_to_member(session_id: str):
-    if not stripe:
-        return False, "尚未安裝 stripe 套件"
-    if not STRIPE_SECRET_KEY:
-        return False, "尚未設定 STRIPE_SECRET_KEY"
-    stripe.api_key = STRIPE_SECRET_KEY
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        username_key = normalize_username((session.get("metadata") or {}).get("app_username") or session.get("client_reference_id") or "")
-        plan_code = (session.get("metadata") or {}).get("app_plan_code") or "pro_monthly"
-        if not username_key:
-            return False, "找不到對應會員"
-        subscription_id = session.get("subscription")
-        customer_id = session.get("customer")
-        current_period_end = None
-        billing_status = session.get("status") or "open"
-        auto_renew = True
-        if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
-            billing_status = sub.get("status") or billing_status
-            cpe = sub.get("current_period_end")
-            if cpe:
-                current_period_end = datetime.fromtimestamp(int(cpe)).isoformat()
-            if sub.get("cancel_at_period_end"):
-                auto_renew = False
-
-        db = load_users_db()
-        user = db.get("users", {}).get(username_key)
-        if not user:
-            return False, "會員不存在"
-        user["role"] = get_plan_meta(plan_code).get("role", "paid")
-        user["plan"] = plan_code
-        user["stripe_customer_id"] = customer_id or user.get("stripe_customer_id")
-        user["stripe_subscription_id"] = subscription_id or user.get("stripe_subscription_id")
-        user["billing_status"] = billing_status
-        user["current_period_end"] = current_period_end
-        user["auto_renew"] = auto_renew
-        user["paid_at"] = datetime.now().isoformat()
-        save_users_db(db)
-        return True, "付款成功，會員方案已同步"
-    except Exception as e:
-        return False, str(e)
+def aes_encrypt_trade_info(trade_info: str, key: str, iv: str) -> str:
+    cipher = AES.new(key.encode("utf-8"), AES.MODE_CBC, iv.encode("utf-8"))
+    encrypted = cipher.encrypt(_pkcs7_pad(trade_info))
+    return encrypted.hex()
 
 
-def create_customer_portal_url(username: str):
-    if not stripe:
-        return None, "尚未安裝 stripe 套件"
-    if not STRIPE_SECRET_KEY:
-        return None, "尚未設定 STRIPE_SECRET_KEY"
-    record = get_member_record(username) or {}
-    customer_id = record.get("stripe_customer_id")
-    if not customer_id:
-        return None, "尚未找到 Stripe Customer，請先完成一次付款"
-    stripe.api_key = STRIPE_SECRET_KEY
-    try:
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=STRIPE_PORTAL_RETURN_URL,
-        )
-        return session.url, None
-    except Exception as e:
-        return None, str(e)
-def sync_member_from_stripe_customer(username: str):
-    if not stripe:
-        return False, "尚未安裝 stripe 套件"
+def sha256_trade_sha(trade_info_hex: str, key: str, iv: str) -> str:
+    raw = f"HashKey={key}&{trade_info_hex}&HashIV={iv}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest().upper()
 
-    if not STRIPE_SECRET_KEY:
-        return False, "尚未設定 STRIPE_SECRET_KEY"
 
+def activate_member_plan(username: str, plan_code: str, paid_amount: float | None = None, trade_no: str | None = None):
     db = load_users_db()
-    user = db.get("users", {}).get(normalize_username(username))
-
+    username_key = normalize_username(username)
+    user = db.get("users", {}).get(username_key)
     if not user:
-        return False, "找不到會員資料"
+        return False, "會員不存在"
 
-    customer_id = user.get("stripe_customer_id")
-    subscription_id = user.get("stripe_subscription_id")
+    meta = get_plan_meta(plan_code)
+    now = datetime.now()
+    current_end = parse_iso_datetime(user.get("current_period_end"))
+    start_dt = current_end if current_end and current_end > now else now
+    new_end = start_dt + timedelta(days=get_plan_days(plan_code))
 
-    if not customer_id and not subscription_id:
-        return False, "尚未綁定 Stripe 客戶或訂閱"
+    user["role"] = meta.get("role", "paid")
+    user["plan"] = plan_code
+    user["billing_status"] = "paid"
+    user["current_period_end"] = new_end.isoformat()
+    user["auto_renew"] = False
+    user["paid_at"] = now.isoformat()
+    if trade_no:
+        user["last_trade_no"] = trade_no
+    if paid_amount is not None:
+        user["last_paid_amount"] = paid_amount
 
-    stripe.api_key = STRIPE_SECRET_KEY
+    save_users_db(db)
+    return True, "會員方案已開通"
 
-    try:
-        sub = None
 
-        if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
+def create_newebpay_order(username: str, email: str, plan_code: str):
+    order_no = f"MEM{datetime.now().strftime('%Y%m%d%H%M%S')}{np.random.randint(1000, 9999)}"
+    amount_twd = get_plan_amount_twd(plan_code)
+    orders_db = load_orders_db()
+    orders_db.setdefault("orders", {})[order_no] = {
+        "order_no": order_no,
+        "username": normalize_username(username),
+        "email": email,
+        "plan_code": plan_code,
+        "amount_twd": amount_twd,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+    }
+    save_orders_db(orders_db)
+    return order_no, amount_twd
 
-        elif customer_id:
-            subs = stripe.Subscription.list(customer=customer_id, limit=1, status="all")
-            if subs.data:
-                sub = subs.data[0]
 
-        if not sub:
-            return False, "Stripe 查無有效訂閱"
+def build_newebpay_payment_payload(username: str, email: str, plan_code: str):
+    if not newebpay_is_ready():
+        return None, "藍新金流尚未設定完成"
 
-        price_id = sub["items"]["data"][0]["price"]["id"]
-        status = sub.get("status", "inactive")
-        current_period_end = sub.get("current_period_end")
-        cancel_at_period_end = sub.get("cancel_at_period_end", False)
+    order_no, amount_twd = create_newebpay_order(username, email, plan_code)
+    item_desc = quote_plus(f"{get_plan_label(plan_code, 'zh')} 會員方案")
+    email_value = quote_plus(email or "")
+    return_url = quote_plus(NEWEBPAY_RETURN_URL)
+    notify_url = quote_plus(NEWEBPAY_NOTIFY_URL) if NEWEBPAY_NOTIFY_URL else ""
+    client_back = quote_plus(f"{NEWEBPAY_CLIENT_BACK_URL}?np_order={order_no}")
 
-        reverse_plan_map = {
-            STRIPE_PRICE_MONTHLY: "pro_monthly",
-            STRIPE_PRICE_6M: "pro_6m",
-            STRIPE_PRICE_YEARLY: "pro_yearly",
-        }
+    trade_info = (
+        f"MerchantID={NEWEBPAY_MERCHANT_ID}"
+        f"&RespondType=JSON"
+        f"&TimeStamp={int(datetime.now().timestamp())}"
+        f"&Version=2.0"
+        f"&MerchantOrderNo={order_no}"
+        f"&Amt={amount_twd}"
+        f"&ItemDesc={item_desc}"
+        f"&Email={email_value}"
+        f"&LoginType=0"
+        f"&ReturnURL={return_url}"
+        f"&NotifyURL={notify_url}"
+        f"&ClientBackURL={client_back}"
+    )
 
-        local_plan = reverse_plan_map.get(price_id, user.get("plan", "free"))
+    trade_info_hex = aes_encrypt_trade_info(trade_info, NEWEBPAY_HASH_KEY, NEWEBPAY_HASH_IV)
+    trade_sha = sha256_trade_sha(trade_info_hex, NEWEBPAY_HASH_KEY, NEWEBPAY_HASH_IV)
 
-        user["plan"] = local_plan
-        user["role"] = "paid" if local_plan.startswith("pro_") else user.get("role", "free")
-        user["billing_status"] = status
-        user["auto_renew"] = not cancel_at_period_end
+    return {
+        "MerchantID": NEWEBPAY_MERCHANT_ID,
+        "TradeInfo": trade_info_hex,
+        "TradeSha": trade_sha,
+        "Version": "2.0",
+        "PayGateWay": NEWEBPAY_MPG_URL,
+        "MerchantOrderNo": order_no,
+        "Amt": amount_twd,
+    }, None
 
-        if current_period_end:
-            user["current_period_end"] = datetime.fromtimestamp(current_period_end).isoformat()
 
-        user["stripe_subscription_id"] = sub.get("id", subscription_id)
+def mark_order_paid(order_no: str, trade_no: str | None = None):
+    orders_db = load_orders_db()
+    order = orders_db.get("orders", {}).get(order_no)
+    if not order:
+        return False, "訂單不存在"
 
-        save_users_db(db)
+    if order.get("status") == "paid":
+        return True, "訂單已付款"
 
-        return True, "Stripe 訂閱狀態已同步"
+    order["status"] = "paid"
+    order["paid_at"] = datetime.now().isoformat()
+    if trade_no:
+        order["trade_no"] = trade_no
+    save_orders_db(orders_db)
 
-    except Exception as e:
-        return False, str(e)
+    return activate_member_plan(
+        username=order["username"],
+        plan_code=order["plan_code"],
+        paid_amount=order.get("amount_twd"),
+        trade_no=trade_no,
+    )
+
+
+def get_pending_order(order_no: str):
+    return load_orders_db().get("orders", {}).get(order_no)
+
+
+def render_newebpay_checkout_button(username: str, email: str, plan_code: str, button_text: str = "前往付款"):
+    payload, err = build_newebpay_payment_payload(username, email, plan_code)
+    if err:
+        st.error(err)
+        return
+
+    html = f"""
+    <form method=\"post\" action=\"{payload['PayGateWay']}\">
+      <input type=\"hidden\" name=\"MerchantID\" value=\"{payload['MerchantID']}\">
+      <input type=\"hidden\" name=\"TradeInfo\" value=\"{payload['TradeInfo']}\">
+      <input type=\"hidden\" name=\"TradeSha\" value=\"{payload['TradeSha']}\">
+      <input type=\"hidden\" name=\"Version\" value=\"{payload['Version']}\">
+      <button type=\"submit\" style=\"width:100%;border:none;border-radius:12px;padding:12px 16px;font-size:16px;font-weight:700;cursor:pointer;background:#2563eb;color:white;\">{button_text}</button>
+    </form>
+    """
+    st.components.v1.html(html, height=74)
+    st.caption(f"訂單編號：{payload['MerchantOrderNo']}｜金額：約 NT${payload['Amt']}")
+
+
 def render_member_profile_card(username: str, lang: str = "zh"):
+
     record = get_member_record(username) or {}
     usage = get_ai_usage_info(username)
-
     plan = record.get("plan", "free")
     plan_label = get_plan_label(plan, lang)
     status = record.get("billing_status", "trial" if plan == "free" else "active")
     next_bill = fmt_member_datetime(record.get("current_period_end"), lang)
     email_text = record.get("email", "-")
-    auto_renew = record.get("auto_renew", plan.startswith("pro_"))
-
-    renew_text = "自動續扣" if auto_renew else "未續扣"
+    renew_text = "自動續扣" if record.get("auto_renew", plan.startswith("pro_")) else "未續扣"
     if lang == "en":
-        renew_text = "Auto renew" if auto_renew else "No auto renew"
+        renew_text = "Auto renew" if record.get("auto_renew", plan.startswith("pro_")) else "No auto renew"
 
-    usage_text = (
-        "AI 無限制"
-        if usage["unlimited"]
-        else f"AI {usage['remaining']} / {FREE_AI_LIMIT}"
-    )
-    if lang == "en":
-        usage_text = (
-            "Unlimited AI"
-            if usage["unlimited"]
-            else f"AI {usage['remaining']} / {FREE_AI_LIMIT}"
-        )
+    st.markdown("""<style>.member-card{border:1px solid rgba(255,255,255,.12);padding:14px 16px;border-radius:18px;background:rgba(255,255,255,.03)} .mini-muted{color:#9aa4b2;font-size:0.88rem}</style>""", unsafe_allow_html=True)
+    st.markdown(f"<div class='member-card'><div style='font-size:1.05rem;font-weight:700'>👤 {username}</div><div class='mini-muted'>{email_text}</div><div style='margin-top:8px'>方案：<b>{plan_label}</b>｜狀態：<b>{status}</b></div><div style='margin-top:4px'>下次扣款 / 到期：<b>{next_bill}</b></div><div style='margin-top:4px'>續訂：<b>{renew_text}</b></div></div>", unsafe_allow_html=True)
 
-    st.markdown(
-        """
-        <style>
-        .member-pill {
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(255,255,255,0.03);
-            border-radius: 18px;
-            padding: 12px 14px;
-        }
-        .member-pill-top {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            gap:10px;
-            margin-bottom:8px;
-        }
-        .member-user {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #f3f4f6;
-        }
-        .member-muted {
-            color:#9aa4b2;
-            font-size:0.86rem;
-        }
-        .member-badge {
-            display:inline-block;
-            padding:4px 10px;
-            border-radius:999px;
-            font-size:0.78rem;
-            font-weight:600;
-            border:1px solid rgba(255,255,255,0.10);
-            margin-right:6px;
-        }
-        .member-badge-plan {
-            background: rgba(59,130,246,0.12);
-            color: #93c5fd;
-        }
-        .member-badge-status {
-            background: rgba(16,185,129,0.12);
-            color: #6ee7b7;
-        }
-        .member-kv {
-            margin-top: 4px;
-            font-size: 0.92rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    if usage["unlimited"]:
+        st.caption("AI 權限：無限制" if lang == "zh" else "AI access: unlimited")
+    else:
+        st.caption((f"AI 剩餘：{usage['remaining']} / {FREE_AI_LIMIT}") if lang == "zh" else (f"AI remaining: {usage['remaining']} / {FREE_AI_LIMIT}"))
 
-    st.markdown(
-        f"""
-        <div class="member-pill">
-            <div class="member-pill-top">
-                <div>
-                    <div class="member-user">👤 {username}</div>
-                    <div class="member-muted">{email_text}</div>
-                </div>
-                <div style="text-align:right">
-                    <span class="member-badge member-badge-plan">{plan_label}</span>
-                    <span class="member-badge member-badge-status">{status}</span>
-                </div>
-            </div>
-            <div class="member-kv">下次扣款 / 到期：<b>{next_bill}</b></div>
-            <div class="member-kv">續訂：<b>{renew_text}</b></div>
-            <div class="member-kv">{usage_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 def render_pricing_cards(current_member: str | None, lang: str = "zh"):
-    st.markdown("### 💳 方案與訂閱" if lang == "zh" else "### 💳 Pricing & Plans")
-    st.caption(
-        "月付 3 美元；半年 8 折；年繳 75 折。可隨時於會員中心管理付款方式與取消續訂。"
-        if lang == "zh"
-        else "$3 monthly, 20% off for 6 months, 25% off yearly."
-    )
-
-    st.markdown(
-        """
-        <style>
-        .price-card{
-            border:1px solid rgba(255,255,255,.10);
-            border-radius:20px;
-            padding:18px;
-            background:rgba(255,255,255,.03);
-            min-height:260px;
-        }
-        .price-title{font-size:1.15rem;font-weight:700;margin-bottom:8px}
-        .price-main{font-size:2rem;font-weight:800;margin-bottom:6px}
-        .price-sub{color:#9aa4b2;font-size:.9rem;margin-bottom:14px}
-        .price-badge{
-            display:inline-block;
-            padding:4px 10px;
-            border-radius:999px;
-            font-size:.78rem;
-            border:1px solid rgba(255,255,255,.1);
-            margin-bottom:12px;
-        }
-        .price-feature{margin-bottom:8px;font-size:.95rem}
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    cards = [
-        {
-            "code": "pro_monthly",
-            "title": "月付版" if lang == "zh" else "Monthly",
-            "price_total": "$3",
-            "avg": "$3 / 月",
-            "badge": "標準方案" if lang == "zh" else "Standard",
-            "desc": "適合先試用正式會員功能" if lang == "zh" else "Good for getting started",
-        },
-        {
-            "code": "pro_6m",
-            "title": "半年版" if lang == "zh" else "6 Months",
-            "price_total": "$14.4",
-            "avg": "$2.4 / 月",
-            "badge": "省 20%" if lang == "zh" else "Save 20%",
-            "desc": "比月付更划算" if lang == "zh" else "Better value than monthly",
-        },
-        {
-            "code": "pro_yearly",
-            "title": "年繳版" if lang == "zh" else "Yearly",
-            "price_total": "$27",
-            "avg": "$2.25 / 月",
-            "badge": "最划算" if lang == "zh" else "Best value",
-            "desc": "長期使用最推薦" if lang == "zh" else "Best for long-term use",
-        },
-    ]
-
+    st.markdown("### 💳 升級方案" if lang == "zh" else "### 💳 Pricing")
+    st.caption("月付 3 美元；半年 8 折；年繳 75 折。第一版先導向藍新金流一次性付款，付款完成後可在首頁手動同步開通。" if lang == "zh" else "Direct users to NewebPay one-time checkout for the first version.")
     cols = st.columns(3)
+    plan_order = ["pro_monthly", "pro_6m", "pro_yearly"]
+    current_record = get_member_record(current_member) if current_member else None
+    current_email = (current_record or {}).get("email", "")
 
-    for col, card in zip(cols, cards):
+    for col, plan_code in zip(cols, plan_order):
+        meta = get_plan_meta(plan_code)
         with col:
-            st.markdown(
-                f"""
-                <div class="price-card">
-                    <div class="price-badge">{card['badge']}</div>
-                    <div class="price-title">{card['title']}</div>
-                    <div class="price-main">{card['price_total']}</div>
-                    <div class="price-sub">{card['avg']}</div>
-                    <div class="price-feature">✓ AI 研究功能</div>
-                    <div class="price-feature">✓ 完整會員權限</div>
-                    <div class="price-feature">✓ 可管理續訂與付款方式</div>
-                    <div class="price-sub">{card['desc']}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(f"### {get_plan_label(plan_code, lang)}")
+            st.markdown(f"**US${meta['price_total']:.2f}**")
+            st.caption((f"平均每月 US${meta['avg_monthly']:.2f}") if lang == "zh" else (f"Avg US${meta['avg_monthly']:.2f}/mo"))
+            st.caption(f"約 NT${get_plan_amount_twd(plan_code)}")
+            st.write("- AI 分析功能" if lang == "zh" else "- AI analysis")
+            st.write("- 股票 / Crypto 全功能" if lang == "zh" else "- Full Stock / Crypto access")
+            st.write("- 藍新金流付款" if lang == "zh" else "- NewebPay checkout")
+            if current_member:
+                render_newebpay_checkout_button(
+                    current_member,
+                    current_email,
+                    plan_code,
+                    "前往藍新付款" if lang == "zh" else "Pay with NewebPay",
+                )
+            else:
+                st.info("請先登入會員後再升級" if lang == "zh" else "Please log in before upgrading")
 
-            if st.button(
-                f"選擇 {card['title']}" if lang == "zh" else f"Choose {card['title']}",
-                key=f"choose_{card['code']}",
-                use_container_width=True
-            ):
-                if not current_member:
-                    st.warning("請先登入會員" if lang == "zh" else "Please login first")
-                else:
-                    rec = get_member_record(current_member) or {}
-                    checkout_url, err = create_checkout_session_for_plan(
-                        current_member,
-                        rec.get("email", ""),
-                        card["code"]
-                    )
-                    if checkout_url:
-                        st.link_button("前往付款" if lang == "zh" else "Go to checkout", checkout_url, use_container_width=True)
-                    else:
-                        st.error(err)
+
 def load_users_db():
     if USERS_DB_FILE.exists():
         try:
@@ -2553,6 +2508,7 @@ def authenticate_member(username: str, password: str):
         "ai_used": int(user.get("ai_used", 0)),
         "email": user.get("email", ""),
     }, None
+
 
 def get_member_record(username: str):
     db = load_users_db()
@@ -3630,51 +3586,19 @@ def run_ai_today_opportunities_crypto(api_key, scan_mode='core', lang='zh'):
 # Sidebar
 # =========================
 with st.sidebar:
-    language = st.selectbox("Language / 語言", ["繁體中文", "English"], index=0)
+    current_language = "繁體中文" if st.session_state.get("lang", "zh") == "zh" else "English"
+    with st.sidebar.expander(tr('Language_', lang), expanded=False):
+        language = st.selectbox(
+            "Language",
+            ["繁體中文", "English"],
+            index=0 if current_language == "繁體中文" else 1,
+            key="language_select"
+        )
+
     lang = "zh" if language == "繁體中文" else "en"
+    st.session_state["lang"] = lang
 
-    st.title(tr("sidebar_title", lang))
-
-    market_mode = st.selectbox("模式 / Mode", ["Stock", "Crypto"], index=0)
-    GEMINI_API_KEY ="AIzaSyAuPhEz7qfy-1bQn1xh5UuNHp3SOj2y2Ik"
-    api_key = GEMINI_API_KEY
-    coinglass_api_key = "9abe6fb3032a4c449ed8ab7506c2dd30"
-    symbol_default = "BTCUSDT" if market_mode == "Crypto" else "AAPL"
-    symbol = st.text_input(tr("symbol", lang), value=symbol_default)
-
-    interval = st.selectbox(
-        tr("interval", lang),
-        ["1h", "4h", "1d", "1wk", "1mo"],
-        index=2
-    )
-
-    show_volume = st.checkbox(tr("show_volume", lang), value=True)
-    show_macd = st.checkbox(tr("show_macd", lang), value=True)
-    show_rsi = st.checkbox(tr("show_rsi", lang), value=False)
-
-    if market_mode == "Stock":
-        peer_input = st.text_input(tr("peer_input", lang), value="")
-    else:
-        peer_input = ""
-
-    scan_mode_options = [
-        tr("scan_mode_core", lang),
-        tr("scan_mode_300", lang),
-        tr("scan_mode_800", lang),
-    ]
-
-    scan_mode = st.selectbox(
-        tr("scan_mode", lang),
-        scan_mode_options,
-        index=0
-    )
-
-    scan_limit = st.slider(tr("scan_limit", lang), min_value=5, max_value=50, value=15, step=1)
-
-    st.caption(tr("sidebar_caption", lang))
-    st.caption("Crypto 模式請輸入 BTCUSDT、ETHUSDT 這類 Bybit 合約代號。")
-
-    with st.expander("會員 / Membership", expanded=True):
+    with st.expander(tr('Membership', lang), expanded=False):
         tab_login, tab_register = st.tabs(["登入", "註冊"])
 
         with tab_login:
@@ -3686,13 +3610,17 @@ with st.sidebar:
                     auth, err = authenticate_member(login_username, login_password)
                     if auth:
                         st.session_state["member_user"] = auth["username"]
+                        sync_watchlist_from_member()
                         st.success(f"已登入：{auth['username']}")
+                        st.rerun()
                     else:
                         st.error(err or "登入失敗")
             with l2:
                 if st.button("登出 / Logout"):
                     st.session_state.pop("member_user", None)
+                    st.session_state["watchlist"] = []
                     st.success("已登出")
+                    st.rerun()
 
         with tab_register:
             reg_username = st.text_input("註冊帳號 / Username", key="reg_username")
@@ -3726,23 +3654,88 @@ with st.sidebar:
         else:
             st.warning("尚未登入會員，AI 功能不開放。")
 
-        st.caption(f"預設管理者帳號：{DEFAULT_ADMIN_USERNAME}（建議用環境變數改密碼）")
         st.caption("防濫用建議：限制一個 Email 只能註冊一個免費帳號，並啟用註冊碼、登入失敗鎖定。")
 
-    colw1, colw2 = st.columns(2)
-    with colw1:
-        if st.button(tr("add_watchlist", lang)):
-            add_to_watchlist(symbol)
-    with colw2:
-        if st.button(tr("remove_watchlist", lang)):
-            remove_from_watchlist(symbol.upper().strip())
+    with st.sidebar.expander(tr("sidebar_title", lang), expanded=True):
+        market_mode = st.selectbox(
+            tr("mode", lang),
+            ["Stock", "Crypto"],
+            index=0,
+            key="market_mode_select"
+        )
+        interval = st.selectbox(
+            tr("interval", lang),
+            ["1h", "4h", "1d", "1wk", "1mo"],
+            index=2,
+            key="interval_select"
+        )
 
-    if st.session_state.watchlist:
-        st.markdown(f"### {tr('watchlist', lang)}")
-        for s in st.session_state.watchlist:
-            st.write(f"- {s}")
+        show_volume = st.checkbox(
+            tr("show_volume", lang),
+            value=st.session_state.get("show_volume", True),
+            key="show_volume"
+        )
+        show_macd = st.checkbox(
+            tr("show_macd", lang),
+            value=st.session_state.get("show_macd", True),
+            key="show_macd"
+        )
+        show_rsi = st.checkbox(
+            tr("show_rsi", lang),
+            value=st.session_state.get("show_rsi", False),
+            key="show_rsi"
+        )
 
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            api_key = os.getenv("GEMINI_API_KEY", "")
 
+        coinglass_api_key = os.getenv("COINGLASS_API_KEY", "")
+
+        symbol_default = "BTCUSDT" if market_mode == "Crypto" else "AAPL"
+        selected_symbol = str(st.session_state.get("selected_symbol", "")).strip().upper()
+
+        if market_mode == "Crypto":
+            if not selected_symbol.endswith("USDT"):
+                selected_symbol = "BTCUSDT"
+        else:
+            if not selected_symbol or selected_symbol.endswith("USDT"):
+                selected_symbol = "AAPL"
+
+        st.session_state["selected_symbol"] = selected_symbol
+        if st.session_state.get("symbol_input", "").strip().upper() != selected_symbol:
+            st.session_state["symbol_input"] = selected_symbol
+
+        symbol = st.text_input(
+            tr("symbol", lang),
+            key="symbol_input"
+        ).strip().upper()
+
+        st.session_state["selected_symbol"] = symbol or selected_symbol
+    
+   
+    with st.expander("⭐ 自選股", expanded=True):
+        if st.session_state.watchlist:
+            for s in st.session_state.watchlist:
+                c1, c2 = st.columns([4, 1])
+
+                with c1:
+                    if st.button(s, key=f"watch_{s}", use_container_width=True):
+                        st.session_state["selected_symbol"] = s
+                        st.rerun()
+
+                with c2:
+                    if st.button("✕", key=f"rm_{s}", use_container_width=True):
+                        remove_from_watchlist(s)
+                        if st.session_state.get("selected_symbol") == s:
+                            st.session_state["selected_symbol"] = ""
+                        st.rerun()
+        else:
+            st.caption("尚未加入自選股")
+    if st.button(tr("add_watchlist", lang), use_container_width=True):
+        add_to_watchlist(symbol)
+        st.rerun()
 
 # =========================
 # Title
@@ -3750,17 +3743,17 @@ with st.sidebar:
 st.title(tr("app_title", lang))
 st.caption(tr("app_caption", lang))
 
-stripe_session_id = st.query_params.get("stripe_session_id")
-if stripe_session_id and st.session_state.get("member_user"):
-    ok, msg = sync_checkout_session_to_member(stripe_session_id)
-    if ok:
-        st.success(msg)
-        try:
-            del st.query_params["stripe_session_id"]
-        except Exception:
-            pass
-    else:
-        st.warning(f"Stripe 同步失敗：{msg}" if lang == "zh" else f"Stripe sync failed: {msg}")
+pending_order_no = st.query_params.get("np_order")
+if pending_order_no and st.session_state.get("member_user"):
+    pending_order = get_pending_order(pending_order_no)
+    if pending_order:
+        st.info(f"已返回網站。若你已在藍新完成付款，可按下方按鈕同步開通。訂單：{pending_order_no}")
+        if st.button("我已完成付款，手動開通測試版", key="btn_mark_np_paid"):
+            ok, msg = mark_order_paid(pending_order_no)
+            if ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
 
 header_left, header_right = st.columns([4.3, 1.2])
 
@@ -3769,43 +3762,14 @@ with header_right:
 
     if current_member_header:
         with st.popover(f"👤 {current_member_header}"):
+
             render_member_profile_card(current_member_header, lang=lang)
 
-            rec = get_member_record(current_member_header) or {}
-            current_email = rec.get("email", "")
-            has_billing = bool(rec.get("stripe_customer_id") or rec.get("stripe_subscription_id"))
+            if st.button("升級會員", use_container_width=True):
+                st.session_state["show_subscription_page"] = True
+                st.rerun()
 
-            if st.button("同步 Stripe", key="btn_sync_stripe_header", use_container_width=True):
-                if has_billing:
-                    ok, msg = sync_member_from_stripe_customer(current_member_header)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.warning(msg)
-                else:
-                    st.caption("尚未綁定付款資料")
-
-            if has_billing:
-                portal_url, err = create_customer_portal_url(current_member_header)
-                if portal_url:
-                    st.link_button("管理訂閱", portal_url, use_container_width=True)
-                else:
-                    st.warning(err)
-            else:
-                if stripe_is_ready():
-                    checkout_url, err = create_checkout_session_for_plan(
-                        current_member_header,
-                        current_email,
-                        "pro_monthly"
-                    )
-                    if checkout_url:
-                        st.link_button("立即升級", checkout_url, use_container_width=True)
-                    else:
-                        st.warning(err)
-                else:
-                    st.caption("付款功能尚未設定完成")
-
-            if st.button("登出", key="btn_logout_header", use_container_width=True):
+            if st.button("登出", use_container_width=True):
                 st.session_state["member_user"] = None
                 st.rerun()
     else:
@@ -3864,7 +3828,71 @@ def scan_market(symbols, lang="zh"):
 
     return pd.DataFrame(results)
 
+# =========================
+# Subscription Page
+# =========================
 
+if st.session_state.get("show_subscription_page"):
+
+    st.markdown("## 💳 訂閱方案")
+
+    current_member = st.session_state.get("member_user")
+    rec = get_member_record(current_member) if current_member else {}
+    current_email = (rec or {}).get("email", "")
+
+    cols = st.columns(3)
+
+    plans = [
+        ("pro_monthly", "PRO 月付"),
+        ("pro_6m", "PRO 半年"),
+        ("pro_yearly", "PRO 年繳"),
+    ]
+
+    for col, (plan_code, label) in zip(cols, plans):
+
+        meta = get_plan_meta(plan_code)
+
+        with col:
+
+            st.subheader(label)
+            st.write(f"US${meta['price_total']}")
+            st.caption(f"平均每月 US${meta['avg_monthly']}")
+
+            st.write("✔ AI 分析")
+            st.write("✔ 股票 + Crypto")
+            st.write("✔ 完整功能")
+
+            if st.button("選擇方案", key=f"choose_{plan_code}"):
+                st.session_state["selected_plan_code"] = plan_code
+                st.rerun()
+
+    plan = st.session_state.get("selected_plan_code")
+
+    if plan:
+
+        st.markdown("---")
+
+        st.info(f"已選方案：{get_plan_label(plan,'zh')}")
+
+        if newebpay_is_ready():
+
+            render_newebpay_checkout_button(
+                current_member,
+                current_email,
+                plan,
+                button_text="前往藍新付款"
+            )
+
+        else:
+
+            st.warning("尚未設定藍新金流環境變數")
+
+        if st.button("返回"):
+            st.session_state["show_subscription_page"] = False
+            st.session_state["selected_plan_code"] = None
+            st.rerun()
+
+    st.stop()
 # =========================
 # Main UI
 # =========================

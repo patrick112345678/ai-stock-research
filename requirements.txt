@@ -5,3 +5,5 @@ numpy
 requests
 google-genai
 streamlit-lightweight-charts-v5
+bcrypt
+pycryptodome
