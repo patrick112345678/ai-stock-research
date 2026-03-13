@@ -2665,7 +2665,7 @@ def fetch_bybit_tickers_linear():
     return df.reset_index(drop=True)
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_bybit_kline(symbol_used, interval):
     interval_map = {
         "1h": "60",
@@ -2694,7 +2694,7 @@ def fetch_bybit_kline(symbol_used, interval):
     return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_bybit_long_short_ratio(symbol_used, period="4h", limit=10):
     payload = safe_request_json(
         f"{BYBIT_BASE_URL}/v5/market/account-ratio",
@@ -2816,7 +2816,7 @@ def fetch_coinglass_funding_exchange_list(base_symbol, coinglass_api_key):
     return _coinglass_payload_to_df(payload)
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_coinglass_open_interest_exchange_list(base_symbol, coinglass_api_key):
     if not coinglass_api_key:
         return pd.DataFrame()
@@ -2830,7 +2830,7 @@ def fetch_coinglass_open_interest_exchange_list(base_symbol, coinglass_api_key):
     return _coinglass_payload_to_df(payload)
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_coinglass_global_account_ratio(base_symbol, coinglass_api_key, exchange="Binance", interval="4h"):
     if not coinglass_api_key:
         return pd.DataFrame()
@@ -2849,7 +2849,7 @@ def fetch_coinglass_global_account_ratio(base_symbol, coinglass_api_key, exchang
     return _coinglass_payload_to_df(payload)
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_coinglass_top_account_ratio(base_symbol, coinglass_api_key, exchange="Binance", interval="4h"):
     if not coinglass_api_key:
         return pd.DataFrame()
@@ -2868,7 +2868,7 @@ def fetch_coinglass_top_account_ratio(base_symbol, coinglass_api_key, exchange="
     return _coinglass_payload_to_df(payload)
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_coinglass_liquidation_history(base_symbol, coinglass_api_key, interval="1h"):
     if not coinglass_api_key:
         return pd.DataFrame()
