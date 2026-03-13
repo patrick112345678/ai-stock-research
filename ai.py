@@ -2626,16 +2626,22 @@ BYBIT_BASE_URL = "https://api.bybit.com"
 COINGLASS_BASE_URL = "https://open-api-v4.coinglass.com"
 
 
-def safe_request_json(url, params=None, headers=None, timeout=20):
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
-        return None
+def safe_request_json(url, params=None, headers=None, timeout=20, retries=3):
+    import time
+
+    for i in range(retries):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if i == retries - 1:
+                print("API error:", e)
+                return None
+            time.sleep(1)
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_bybit_tickers_linear():
     payload = safe_request_json(f"{BYBIT_BASE_URL}/v5/market/tickers", params={"category": "linear"})
     if not payload or str(payload.get("retCode")) != "0":
