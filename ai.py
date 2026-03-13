@@ -3727,9 +3727,10 @@ with st.sidebar:
             st.rerun()
 
         market_mode = st.selectbox(tr("mode", lang), ["Stock", "Crypto"], index=0)
-
-        GEMINI_API_KEY = "AIzaSyAuPhEz7qfy-1bQn1xh5UuNHp3SOj2y2Ik"
-        api_key = GEMINI_API_KEY
+        
+        import streamlit as st
+        
+        api_key = st.secrets["GEMINI_API_KEY"]
 
         coinglass_api_key = "coinglass_api_key"
 

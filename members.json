@@ -1,7 +1,7 @@
 {
   "users": {
     "admin": {
-      "password_hash": "$2b$12$AEi8dLahP1dcq/3R5BpgHe1iOsLgoZZiiD5Zt2Zc66M7wIhd8P0yq",
+      "password_hash": "$2b$12$6uyQ656NwItnFXHgk/EdzOA72n4wahyAiAZP0BPBnyzsFZafW34Fi",
       "role": "admin",
       "plan": "admin",
       "ai_used": 0,
@@ -10,7 +10,7 @@
       "email": "",
       "failed_login_count": 0,
       "lock_until": null,
-      "last_login_at": "2026-03-13T16:27:16.121119"
+      "last_login_at": "2026-03-13T13:18:04.004561"
     },
     "123456": {
       "password_hash": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
