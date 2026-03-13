@@ -25,6 +25,12 @@ except Exception:
 # =========================
 # UI State
 # =========================
+if "selected_symbol" not in st.session_state:
+    st.session_state["selected_symbol"] = "AAPL"
+if "symbol_input" not in st.session_state:
+    st.session_state["symbol_input"] = st.session_state["selected_symbol"]
+if "ui_mode" not in st.session_state:
+    st.session_state["ui_mode"] = "Desktop"
 if "show_subscription_page" not in st.session_state:
     st.session_state["show_subscription_page"] = False
 
@@ -551,6 +557,72 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def apply_layout_styles(ui_mode="Desktop"):
+    if ui_mode == "Mobile":
+        st.markdown(
+            """
+            <style>
+            .block-container {
+                max-width: 480px;
+                padding-top: 0.8rem;
+                padding-left: 0.8rem;
+                padding-right: 0.8rem;
+                padding-bottom: 4.5rem;
+            }
+            .hero-card {
+                border-radius: 20px;
+                padding: 14px 14px;
+            }
+            .hero-title {
+                font-size: 1.35rem;
+                line-height: 1.35;
+            }
+            .hero-sub {
+                font-size: 0.88rem;
+            }
+            .badge {
+                font-size: 0.74rem;
+                margin-top: 6px;
+                margin-bottom: 3px;
+            }
+            .ai-box {
+                font-size: 0.95rem;
+                border-radius: 14px;
+            }
+            div[data-testid="stMetric"] {
+                padding: 0.4rem 0.2rem;
+            }
+            div[data-testid="stMetricLabel"] p {
+                font-size: 0.82rem;
+            }
+            div[data-testid="stMetricValue"] {
+                font-size: 1.35rem;
+            }
+            button[kind=secondary], button[kind=primary] {
+                border-radius: 14px !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <style>
+            .block-container {
+                max-width: 1550px;
+                padding-top: 1.2rem;
+                padding-bottom: 2rem;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+apply_layout_styles(st.session_state.get("ui_mode", "Desktop"))
 
 # =========================
 # Built-in Universe / Peer Map
@@ -1897,20 +1969,23 @@ def build_tv_charts(df, interval="1d", show_volume=True, show_macd=True, show_rs
     return charts
 
 def sync_watchlist_from_member():
-    if "username" not in st.session_state:
-        return
 
-    username = st.session_state["username"]
+    username = st.session_state.get("member_user")
+
+    if not username:
+        return
 
     try:
         with open("members.json", "r", encoding="utf-8") as f:
-            members = json.load(f)
+            data = json.load(f)
 
-        if username in members:
-            watchlist = members[username].get("watchlist", [])
-            st.session_state["watchlist"] = watchlist
+        users = data.get("users", {})
 
-    except Exception:
+        if username in users:
+            st.session_state["watchlist"] = users[username].get("watchlist", [])
+
+    except Exception as e:
+        print("sync_watchlist error:", e)
         st.session_state["watchlist"] = []
 # =========================
 # Watchlist Session
@@ -3641,6 +3716,16 @@ with st.sidebar:
 
     with st.sidebar.expander(tr("sidebar_title", lang), expanded=False):
 
+        ui_mode = st.selectbox(
+            "介面 / Layout",
+            ["Desktop", "Mobile"],
+            index=0 if st.session_state.get("ui_mode", "Desktop") == "Desktop" else 1,
+            key="ui_mode_selector"
+        )
+        if ui_mode != st.session_state.get("ui_mode"):
+            st.session_state["ui_mode"] = ui_mode
+            st.rerun()
+
         market_mode = st.selectbox(tr("mode", lang), ["Stock", "Crypto"], index=0)
 
         GEMINI_API_KEY = "AIzaSyAuPhEz7qfy-1bQn1xh5UuNHp3SOj2y2Ik"
@@ -3650,12 +3735,30 @@ with st.sidebar:
 
         symbol_default = "BTCUSDT" if market_mode == "Crypto" else "AAPL"
 
-        symbol = st.text_input(tr("symbol", lang), value=symbol_default)
+        current_selected = str(st.session_state.get("selected_symbol", "") or "").upper().strip()
+        if market_mode == "Crypto":
+            if not current_selected.endswith("USDT"):
+                current_selected = "BTCUSDT"
+        else:
+            if not current_selected or current_selected.endswith("USDT"):
+                current_selected = "AAPL"
 
+        st.session_state["selected_symbol"] = current_selected
+        if st.session_state.get("symbol_input") != current_selected:
+            st.session_state["symbol_input"] = current_selected
+
+        symbol = st.text_input(
+            tr("symbol", lang),
+            key="symbol_input"
+        )
+        symbol = symbol.strip().upper()
+        st.session_state["selected_symbol"] = symbol
+
+        interval_default = 2 if st.session_state.get("ui_mode", "Desktop") == "Desktop" else 1
         interval = st.selectbox(
             tr("interval", lang),
             ["1h", "4h", "1d", "1wk", "1mo"],
-            index=2
+            index=interval_default
         )
 
         show_volume = st.checkbox(tr("show_volume", lang), value=True)
@@ -3683,18 +3786,25 @@ with st.sidebar:
 
         st.caption(tr("sidebar_caption", lang))
         st.caption("Crypto 模式請輸入 BTCUSDT、ETHUSDT 這類 Bybit 合約代號。")
+        st.caption("Mobile 版會自動縮窄內容寬度、壓縮圖表高度與放大手機點擊區。")
 
     
    
-    with st.expander("⭐ 自選股", expanded=False):
+    with st.expander("⭐ 自選股", expanded=True):
         if st.session_state.watchlist:
             for s in st.session_state.watchlist:
                 c1, c2 = st.columns([4, 1])
+
                 with c1:
-                    st.write(s)
+                    if st.button(s, key=f"watch_{s}", use_container_width=True):
+                        st.session_state["selected_symbol"] = s
+                        st.rerun()
+
                 with c2:
-                    if st.button("✕", key=f"rm_{s}"):
+                    if st.button("✕", key=f"rm_{s}", use_container_width=True):
                         remove_from_watchlist(s)
+                        if st.session_state.get("selected_symbol") == s:
+                            st.session_state["selected_symbol"] = ""
                         st.rerun()
         else:
             st.caption("尚未加入自選股")
@@ -3705,6 +3815,7 @@ with st.sidebar:
 # =========================
 # Title
 # =========================
+ui_mode = st.session_state.get("ui_mode", "Desktop")
 st.title(tr("app_title", lang))
 st.caption(tr("app_caption", lang))
 
@@ -3720,7 +3831,11 @@ if pending_order_no and st.session_state.get("member_user"):
             else:
                 st.warning(msg)
 
-header_left, header_right = st.columns([4.3, 1.2])
+if ui_mode == "Mobile":
+    header_left = st.container()
+    header_right = st.container()
+else:
+    header_left, header_right = st.columns([4.3, 1.2])
 
 with header_right:
     current_member_header = st.session_state.get("member_user")
@@ -3918,12 +4033,21 @@ if symbol:
             )
             st.metric(tr("market_cap", lang), fmt_large_num(data.get("market_cap")))
 
-        s1, s2, s3, s4, s5 = st.columns(5)
-        s1.metric(tr("trend", lang), quick_summary["trend"])
-        s2.metric(tr("valuation", lang), quick_summary["valuation"])
-        s3.metric(tr("risk", lang), quick_summary["risk"])
-        s4.metric(tr("bull_signal", lang), f"{data['bull']}%")
-        s5.metric(tr("bear_signal", lang), f"{data['bear']}%")
+        if ui_mode == "Mobile":
+            r1c1, r1c2 = st.columns(2)
+            r2c1, r2c2, r2c3 = st.columns(3)
+            r1c1.metric(tr("trend", lang), quick_summary["trend"])
+            r1c2.metric(tr("valuation", lang), quick_summary["valuation"])
+            r2c1.metric(tr("risk", lang), quick_summary["risk"])
+            r2c2.metric(tr("bull_signal", lang), f"{data['bull']}%")
+            r2c3.metric(tr("bear_signal", lang), f"{data['bear']}%")
+        else:
+            s1, s2, s3, s4, s5 = st.columns(5)
+            s1.metric(tr("trend", lang), quick_summary["trend"])
+            s2.metric(tr("valuation", lang), quick_summary["valuation"])
+            s3.metric(tr("risk", lang), quick_summary["risk"])
+            s4.metric(tr("bull_signal", lang), f"{data['bull']}%")
+            s5.metric(tr("bear_signal", lang), f"{data['bear']}%")
 
         st.info(quick_summary["one_line"])
         st.markdown(f"<div class='ai-box'>{local_ai_brief}</div>", unsafe_allow_html=True)
@@ -3954,7 +4078,11 @@ if symbol:
         # Tab 1: Overview
         # =========================
         with tab1:
-            left, right = st.columns([2.2, 1])
+            if ui_mode == "Mobile":
+                left = st.container()
+                right = st.container()
+            else:
+                left, right = st.columns([2.2, 1])
 
             with st.expander("📊 圖表與關鍵摘要", expanded=True):
 
@@ -3971,16 +4099,23 @@ if symbol:
                     resistance=data["resistance"]
                 )
 
+                chart_height = 720 if (show_macd or show_rsi) else 420
+                if ui_mode == "Desktop":
+                    chart_height = 980 if (show_macd or show_rsi) else 640
                 lightweight_charts_v5_component(
                     name=f"tv_chart_{data['symbol_used']}_{data['interval']}",
                     charts=charts,
-                    height=980 if (show_macd or show_rsi) else 640
+                    height=chart_height
                 )
 
                 # 關鍵摘要
                 st.markdown(f"### {plain_title(tr('key_summary', lang))}")
 
-                col1, col2, col3 = st.columns(3)
+                if ui_mode == "Mobile":
+                    col1, col2 = st.columns(2)
+                    col3 = st.container()
+                else:
+                    col1, col2, col3 = st.columns(3)
 
                 with col1:
                     st.metric(tr("support", lang), fmt_value(data["support"]))
